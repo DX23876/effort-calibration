@@ -50,7 +50,7 @@ th.l, td.l { text-align: left; }
 thead th { background: var(--code); }
 ul { margin: 6px 0 10px; padding-left: 20px; }
 label.q { display: block; font-weight: 600; margin: 12px 0 4px; }
-.opts label { margin-right: 14px; white-space: nowrap; }
+.opts label { margin-right: 14px; white-space: nowrap; display: inline-block; margin-bottom: 4px; }
 input[type=text], select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--text); max-width: 100%; }
 #strap, #sports { width: 100%; }
 textarea { width: 100%; min-height: 170px; font: .85rem/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 10px;
@@ -112,6 +112,16 @@ pre { white-space: pre-wrap; background: var(--code); padding: 10px; border-radi
       <label><input type="radio" name="zones" value="yes"> yes</label>
       <label><input type="radio" name="zones" value="not sure"> not sure</label>
     </div>
+    <div id="zonebounds" hidden>
+      <p class="muted">Lower bound of each zone in bpm, as shown in the WHOOP app. With these, your workouts can still be used.</p>
+      <div class="opts">
+        <label>Z1 <input id="zb1" type="text" inputmode="numeric" size="4"></label>
+        <label>Z2 <input id="zb2" type="text" inputmode="numeric" size="4"></label>
+        <label>Z3 <input id="zb3" type="text" inputmode="numeric" size="4"></label>
+        <label>Z4 <input id="zb4" type="text" inputmode="numeric" size="4"></label>
+        <label>Z5 <input id="zb5" type="text" inputmode="numeric" size="4"></label>
+      </div>
+    </div>
     <label class="q">Workouts imported from another device (Strava, a watch, Apple Health)?</label>
     <div class="opts">
       <label><input type="radio" name="imported" value="no" checked> no</label>
@@ -127,7 +137,7 @@ pre { white-space: pre-wrap; background: var(--code); padding: 10px; border-radi
   <div class="card off" id="post">
     <h2><span class="step">5</span>Post it</h2>
     <p>Copy this text into a new comment on <a href="https://github.com/ryanbr/noop/issues/2438">#2438</a> and attach both files.
-      The comment is public.</p>
+      The comment is public. Posting needs a free GitHub account; any username works.</p>
     <textarea id="comment" readonly></textarea>
     <button id="copy">Copy text</button>
     <a class="button" href="https://github.com/ryanbr/noop/issues/2438">Open the issue</a>
@@ -139,7 +149,7 @@ pre { white-space: pre-wrap; background: var(--code); padding: 10px; border-radi
 </main>
 
 <script id="core">
-// Same logic as whoop_strain_share.py v4. Keep the two in step: they must produce byte-identical files.
+// Same logic as whoop_strain_share.py v4.1. Keep the two in step: they must produce byte-identical files.
 const ALIASES = {
   cycle_start: ["cycle_start_time", "startzeit_des_zyklus", "hora_de_inicio_del_ciclo", "heure_de_debut_du_cycle", "hora_de_inicio_do_ciclo"],
   activity_name: ["activity_name", "name_der_aktivitat", "nombre_de_la_actividad", "nom_de_l_activite", "nome_da_atividade"],
@@ -326,12 +336,16 @@ if (typeof module !== "undefined") module.exports = { processZip };
 
   function comment() {
     const v = n => (document.querySelector(`input[name=${n}]:checked`) || {}).value || "-";
+    let zones = v("zones");
+    $("zonebounds").hidden = zones !== "yes";
+    if (zones === "yes")
+      zones = "yes, lower bounds (bpm): " + [1, 2, 3, 4, 5].map(i => `Z${i} ${$("zb" + i).value.trim() || "?"}`).join(", ");
     let max = v("maxmode");
     if (max === "manual") max = `manual ${$("maxhr").value.trim() || "?"}`;
     const lines = [
-      "WHOOP export, shared with the Effort calibration page (same output as whoop_strain_share.py v4).", "",
+      "WHOOP export, shared with the Effort calibration page (same output as whoop_strain_share.py v4.1).", "",
       `- Max HR setting in WHOOP: ${max}`,
-      `- Custom HR zones in WHOOP: ${v("zones")}`,
+      `- Custom HR zones in WHOOP: ${zones}`,
       `- Workouts imported from another device (Strava, a watch, Apple Health): ${v("imported")}`,
       `- Strap model: ${$("strap").value.trim() || "-"}`,
       `- Main sports: ${$("sports").value.trim() || "-"}`, "",

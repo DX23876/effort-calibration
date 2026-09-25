@@ -1,4 +1,4 @@
-# v4 - Reduces a WHOOP data export to the few columns needed to calibrate Effort.
+# v4.1 - Reduces a WHOOP data export to the few columns needed to calibrate Effort.
 # Keeps: activity name, duration, strain values, HR-zone shares and heart rates.
 # Drops: dates, times, sleep, HRV, recovery, skin temp, SpO2, journal.
 # Finds columns by header name (English, German, Spanish, French, Portuguese), so it works across
@@ -117,11 +117,17 @@ QUESTIONS = [
     ("Strap model", "4.0 / 5.0 / MG, or several"),
     ("Main sports", "optional"),
 ]
+answers = []
 try:
-    answers = [input(f"{q} ({hint}): ").strip() or "-" for q, hint in QUESTIONS]
+    for q, hint in QUESTIONS:
+        answers.append(input(f"{q} ({hint}): ").strip() or "-")
+        if q.startswith("Custom HR zones") and answers[-1].lower().startswith("y"):
+            bounds = input("  Lower bound of zones 1-5 in bpm, as shown in the WHOOP app (e.g. 122 140 152 165 178): ").split()
+            bounds += ["?"] * (5 - len(bounds))
+            answers[-1] = "yes, lower bounds (bpm): " + ", ".join(f"Z{i} {v}" for i, v in enumerate(bounds[:5], 1))
 except EOFError:
-    answers = ["-"] * len(QUESTIONS)
+    answers += ["-"] * (len(QUESTIONS) - len(answers))
 print("\n--- copy this into your comment on https://github.com/ryanbr/noop/issues/2438 and attach both files ---\n")
-print("WHOOP export, shared with whoop_strain_share.py v4.\n")
+print("WHOOP export, shared with whoop_strain_share.py v4.1.\n")
 for (q, _), a in zip(QUESTIONS, answers): print(f"- {q}: {a}")
 print("\nIf your NOOP build includes #2459, paste your `effort calib` lines below.")
