@@ -55,6 +55,7 @@ input[type=text], select { font: inherit; padding: 6px 8px; border: 1px solid va
 #strap, #sports { width: 100%; }
 textarea { width: 100%; min-height: 170px; font: .85rem/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 10px;
   border: 1px solid var(--line); border-radius: 8px; background: var(--code); color: var(--text); }
+table.explain th, table.explain td { white-space: normal; }
 pre { white-space: pre-wrap; background: var(--code); padding: 10px; border-radius: 8px; font-size: .8rem; }
 </style>
 </head>
@@ -64,6 +65,42 @@ pre { white-space: pre-wrap; background: var(--code); padding: 10px; border-radi
   <p class="lead">This page turns a WHOOP data export into two small files for the Effort recalibration in
     <a href="https://github.com/ryanbr/noop/issues/2438">ryanbr/noop#2438</a>. It keeps only what the fit needs
     and drops everything personal.</p>
+
+  <div class="card">
+    <h2>Why Effort needs recalibrating</h2>
+    <p>Effort tells you how hard your day was for your heart: 0 is a lazy day, 21 (or 100 on NOOP's own scale) is
+      the absolute maximum. Right now the scale is set up in a way that works against anyone who wants to get fitter:</p>
+    <ul>
+      <li><strong>A little movement already looks like a lot.</strong> A 30-minute walk gives about 8 out of 21, and
+        45 minutes gives about 10, which already counts as "moderate".</li>
+      <li><strong>A lot of training barely counts.</strong> Once you are at about 14, two extra hours of hard training
+        add only about 1.5 points. A marathon ends up at about 16, and 20 is practically out of reach.</li>
+    </ul>
+    <p>The reason is simple: the top of the scale was set at 24 hours in a row near your maximum heart rate. Nobody
+      has a day like that, so everything real gets squeezed into the lower part of the scale.</p>
+    <p>The goal is a scale where extra training shows up clearly, hard days like a marathon can reach 19–20, and
+      21 stays almost unreachable. People coming from WHOOP should see roughly the same ranges as before. This is not
+      a copy of WHOOP's formula, just the same idea of what "light", "moderate", "hard" and "all-out" mean.</p>
+    <div class="scroll">
+      <table class="explain">
+        <thead><tr><th class="l">Example day</th><th>today</th><th>goal (roughly)</th></tr></thead>
+        <tbody>
+          <tr><td class="l">30-minute brisk walk</td><td>8</td><td>6</td></tr>
+          <tr><td class="l">1 hour of hard training</td><td>13</td><td>16</td></tr>
+          <tr><td class="l">Marathon</td><td>16</td><td>19–20</td></tr>
+          <tr><td class="l">24 hours near max heart rate</td><td>21</td><td>just under 21</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted">The "goal" column is an illustration. The real numbers will come from your data.</p>
+    <h2 style="margin-top:18px">Why your WHOOP data helps</h2>
+    <p>A WHOOP export shows, for every workout, how long you spent in each heart-rate zone and what score WHOOP gave
+      it. With exports from many different people (walkers, lifters, runners, cyclists, fit and less fit) the new
+      scale can be fitted so it is fair for everyone, not tuned to one person. Light days help as much as hard ones.
+      Days at 18 and above (a marathon, a race, a long tour) are especially wanted, because they are rare.</p>
+    <p class="muted">Collection runs until about 8 October 2026. The result is then posted openly in
+      <a href="https://github.com/ryanbr/noop/issues/2438">#2438</a> and proposed to NOOP's maintainer.</p>
+  </div>
 
   <div class="card privacy">
     <h2>Your data stays on your device</h2>
