@@ -106,9 +106,11 @@ pre { white-space: pre-wrap; background: var(--code); padding: 10px; border-radi
     <h2>Your data stays on your device</h2>
     <p>Everything runs in your browser. Nothing is uploaded: this page has no server, and its security policy blocks
       every network request. You can also save the page and open it offline.</p>
-    <p class="muted">Kept: activity name, duration, strain, max/avg heart rate, HR-zone shares; per day: Day Strain,
-      resting/max/avg heart rate. Days are numbered 0, 1, 2… instead of dated.<br>
-      Dropped: all dates and times, sleep, HRV, recovery, skin temperature, SpO₂ and the journal.</p>
+    <p class="muted">Kept: year and month, activity name, duration, strain, max/avg heart rate, HR-zone shares; per day:
+      Day Strain, resting/max/avg heart rate. Days are numbered 0, 1, 2… instead of dated.<br>
+      Dropped: exact dates and times, sleep, HRV, recovery, skin temperature, SpO₂ and the journal.<br>
+      Year and month stay because WHOOP changed how it defines its heart-rate zones at some point, and the fit has to
+      know which of your workouts came before that.</p>
   </div>
 
   <div class="card">
@@ -186,7 +188,7 @@ pre { white-space: pre-wrap; background: var(--code); padding: 10px; border-radi
 </main>
 
 <script id="core">
-// Same logic as whoop_strain_share.py v4.1. Keep the two in step: they must produce byte-identical files.
+// Same logic as whoop_strain_share.py v5. Keep the two in step: they must produce byte-identical files.
 const ALIASES = {
   cycle_start: ["cycle_start_time", "startzeit_des_zyklus", "hora_de_inicio_del_ciclo", "heure_de_debut_du_cycle", "hora_de_inicio_do_ciclo"],
   activity_name: ["activity_name", "name_der_aktivitat", "nombre_de_la_actividad", "nom_de_l_activite", "nome_da_atividade"],
@@ -265,6 +267,11 @@ function stamp(s) {
   return Math.round(t.getTime() / 1000);
 }
 
+function month(s) {
+  const m = s.match(/^\s*(\d{4})-(\d{1,2})-/);
+  return m ? `${m[1]}-${String(Number(m[2])).padStart(2, "0")}` : "";
+}
+
 function minutes(r, c) {
   const t0 = stamp(cell(r, c, "workout_start")), t1 = stamp(cell(r, c, "workout_end"));
   if (t0 === null || t1 === null) return cell(r, c, "duration");
@@ -333,15 +340,17 @@ async function processZip(buf) {
   const [wr, wc] = workouts, [cr, cc] = cycles;
   const starts = [...new Set(cr.slice(1).map(r => cell(r, cc, "cycle_start")))].sort();
   const dayId = new Map(starts.map((s, i) => [s, i]));
-  const w = [["day", "activity", "duration_min", "strain", "max_hr", "avg_hr", "z1", "z2", "z3", "z4", "z5"]];
+  const w = [["day", "month", "activity", "duration_min", "strain", "max_hr", "avg_hr", "z1", "z2", "z3", "z4", "z5"]];
   for (const r of wr.slice(1)) {
     const id = dayId.get(cell(r, wc, "cycle_start"));
-    w.push([id === undefined ? "" : id, cell(r, wc, "activity_name"), minutes(r, wc),
+    w.push([id === undefined ? "" : id, month(cell(r, wc, "workout_start")) || month(cell(r, wc, "cycle_start")),
+      cell(r, wc, "activity_name"), minutes(r, wc),
       ...["activity_strain", "max_hr", "avg_hr", "z1", "z2", "z3", "z4", "z5"].map(k => cell(r, wc, k))]);
   }
-  const d = [["day", "day_strain", "resting_hr", "max_hr", "avg_hr"]];
+  const d = [["day", "month", "day_strain", "resting_hr", "max_hr", "avg_hr"]];
   for (const r of cr.slice(1))
-    if (cell(r, cc, "day_strain")) d.push([dayId.get(cell(r, cc, "cycle_start")), ...["day_strain", "resting_hr", "max_hr", "avg_hr"].map(k => cell(r, cc, k))]);
+    if (cell(r, cc, "day_strain")) d.push([dayId.get(cell(r, cc, "cycle_start")), month(cell(r, cc, "cycle_start")),
+      ...["day_strain", "resting_hr", "max_hr", "avg_hr"].map(k => cell(r, cc, k))]);
   return { workouts: toCsv(w), days: toCsv(d), nWorkouts: w.length - 1, nDays: d.length - 1, wRows: w, dRows: d };
 }
 if (typeof module !== "undefined") module.exports = { processZip };
@@ -380,7 +389,7 @@ if (typeof module !== "undefined") module.exports = { processZip };
     let max = v("maxmode");
     if (max === "manual") max = `manual ${$("maxhr").value.trim() || "?"}`;
     const lines = [
-      "WHOOP export, shared with the Effort calibration page (same output as whoop_strain_share.py v4.1).", "",
+      "WHOOP export, shared with the Effort calibration page (same output as whoop_strain_share.py v5).", "",
       `- Max HR setting in WHOOP: ${max}`,
       `- Custom HR zones in WHOOP: ${zones}`,
       `- Workouts imported from another device (Strava, a watch, Apple Health): ${v("imported")}`,

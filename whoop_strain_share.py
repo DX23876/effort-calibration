@@ -1,6 +1,7 @@
-# v4.1 - Reduces a WHOOP data export to the few columns needed to calibrate Effort.
-# Keeps: activity name, duration, strain values, HR-zone shares and heart rates.
-# Drops: dates, times, sleep, HRV, recovery, skin temp, SpO2, journal.
+# v5 - Reduces a WHOOP data export to the few columns needed to calibrate Effort.
+# Keeps: year and month, activity name, duration, strain values, HR-zone shares and heart rates.
+# Drops: exact dates and times, sleep, HRV, recovery, skin temp, SpO2, journal.
+# Year and month stay because WHOOP changed how it defines its zones at a fixed point in time.
 # Finds columns by header name (English, German, Spanish, French, Portuguese), so it works across
 # export versions and app languages. Usage: python3 whoop_strain_share.py my_whoop_data.zip
 import csv, io, re, sys, unicodedata, zipfile
@@ -59,6 +60,10 @@ def stamp(s):
     try: return int((datetime(y, mo, d, h, mi, se) - datetime(1970, 1, 1)).total_seconds())
     except ValueError: return None
 
+def month(s):
+    m = re.match(r"\s*(\d{4})-(\d{1,2})-", s)
+    return f"{m.group(1)}-{int(m.group(2)):02d}" if m else ""
+
 def minutes(r, c):
     t0, t1 = stamp(cell(r, c, "workout_start")), stamp(cell(r, c, "workout_end"))
     if t0 is None or t1 is None: return cell(r, c, "duration")
@@ -98,16 +103,18 @@ for label, table, need in (("workouts", workouts, need_w), ("cycles", cycles, ne
 day_id = {s: i for i, s in enumerate(sorted({cell(r, cc, "cycle_start") for r in cr[1:]}))}
 with open("whoop_workouts_shared.csv", "w", newline="") as f:
     w = csv.writer(f)
-    w.writerow(["day", "activity", "duration_min", "strain", "max_hr", "avg_hr", "z1", "z2", "z3", "z4", "z5"])
+    w.writerow(["day", "month", "activity", "duration_min", "strain", "max_hr", "avg_hr", "z1", "z2", "z3", "z4", "z5"])
     for r in wr[1:]:
-        w.writerow([day_id.get(cell(r, wc, "cycle_start"), ""), cell(r, wc, "activity_name"), minutes(r, wc),
+        w.writerow([day_id.get(cell(r, wc, "cycle_start"), ""), month(cell(r, wc, "workout_start")) or month(cell(r, wc, "cycle_start")),
+                    cell(r, wc, "activity_name"), minutes(r, wc),
                     *(cell(r, wc, k) for k in ("activity_strain", "max_hr", "avg_hr", "z1", "z2", "z3", "z4", "z5"))])
 with open("whoop_days_shared.csv", "w", newline="") as f:
     w = csv.writer(f)
-    w.writerow(["day", "day_strain", "resting_hr", "max_hr", "avg_hr"])
+    w.writerow(["day", "month", "day_strain", "resting_hr", "max_hr", "avg_hr"])
     for r in cr[1:]:
         if cell(r, cc, "day_strain"):
-            w.writerow([day_id[cell(r, cc, "cycle_start")], *(cell(r, cc, k) for k in ("day_strain", "resting_hr", "max_hr", "avg_hr"))])
+            w.writerow([day_id[cell(r, cc, "cycle_start")], month(cell(r, cc, "cycle_start")),
+                        *(cell(r, cc, k) for k in ("day_strain", "resting_hr", "max_hr", "avg_hr"))])
 print("wrote whoop_workouts_shared.csv and whoop_days_shared.csv - open them and check before sharing\n")
 
 QUESTIONS = [
@@ -128,6 +135,6 @@ try:
 except EOFError:
     answers += ["-"] * (len(QUESTIONS) - len(answers))
 print("\n--- copy this into your comment on https://github.com/ryanbr/noop/issues/2438 and attach both files ---\n")
-print("WHOOP export, shared with whoop_strain_share.py v4.1.\n")
+print("WHOOP export, shared with whoop_strain_share.py v5.\n")
 for (q, _), a in zip(QUESTIONS, answers): print(f"- {q}: {a}")
 print("\nIf your NOOP build includes #2459, paste your `effort calib` lines below.")
