@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<meta name="referrer" content="no-referrer">
+<title>Effort calibration</title>
+<style>
+:root {
+  --bg: #f6f7f9; --card: #ffffff; --text: #16181d; --muted: #5b6270; --line: #dde1e7;
+  --accent: #2458d6; --accent-text: #ffffff; --ok: #1d7a46; --warn: #a15c00; --err: #b3261e;
+  --code: #eef1f5; --drop: #eef3ff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111317; --card: #1a1d23; --text: #e8eaee; --muted: #a0a7b4; --line: #2c313a;
+    --accent: #7ea3ff; --accent-text: #0d1220; --ok: #5fcf8e; --warn: #f0b35a; --err: #ff8a80;
+    --code: #232730; --drop: #1d2433;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { font-size: 1.6rem; line-height: 1.25; margin: 0 0 8px; }
+h2 { font-size: 1.1rem; margin: 0 0 10px; }
+p { margin: 0 0 10px; }
+.lead { color: var(--muted); margin-bottom: 20px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 18px 14px; margin: 14px 0; }
+.card.off { opacity: .45; pointer-events: none; }
+.step { display: inline-block; min-width: 1.6em; height: 1.6em; line-height: 1.6em; text-align: center; border-radius: 50%;
+  background: var(--accent); color: var(--accent-text); font-size: .85rem; font-weight: 600; margin-right: 6px; }
+.privacy { border-left: 4px solid var(--ok); }
+.muted { color: var(--muted); font-size: .92rem; }
+a { color: var(--accent); }
+code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: .9em; }
+#drop { display: block; border: 2px dashed var(--line); border-radius: 10px; background: var(--drop); padding: 26px 14px; text-align: center; cursor: pointer; }
+#drop.over { border-color: var(--accent); }
+#drop input { display: none; }
+button, .button { font: inherit; font-weight: 600; border: 0; border-radius: 8px; padding: 9px 14px; cursor: pointer;
+  background: var(--accent); color: var(--accent-text); text-decoration: none; display: inline-block; margin: 4px 6px 4px 0; }
+button.secondary { background: var(--code); color: var(--text); }
+#status { margin-top: 10px; }
+.ok { color: var(--ok); } .warn { color: var(--warn); } .err { color: var(--err); }
+.scroll { overflow-x: auto; margin: 8px 0 12px; border: 1px solid var(--line); border-radius: 8px; }
+table { border-collapse: collapse; font-size: .82rem; width: 100%; }
+th, td { padding: 4px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+th.l, td.l { text-align: left; }
+thead th { background: var(--code); }
+ul { margin: 6px 0 10px; padding-left: 20px; }
+label.q { display: block; font-weight: 600; margin: 12px 0 4px; }
+.opts label { margin-right: 14px; white-space: nowrap; }
+input[type=text], select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--text); max-width: 100%; }
+#strap, #sports { width: 100%; }
+textarea { width: 100%; min-height: 170px; font: .85rem/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 10px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--code); color: var(--text); }
+pre { white-space: pre-wrap; background: var(--code); padding: 10px; border-radius: 8px; font-size: .8rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Share your WHOOP data to calibrate NOOP's Effort</h1>
+  <p class="lead">This page turns a WHOOP data export into two small files for the Effort recalibration in
+    <a href="https://github.com/ryanbr/noop/issues/2438">ryanbr/noop#2438</a>. It keeps only what the fit needs
+    and drops everything personal.</p>
+
+  <div class="card privacy">
+    <h2>Your data stays on your device</h2>
+    <p>Everything runs in your browser. Nothing is uploaded: this page has no server, and its security policy blocks
+      every network request. You can also save the page and open it offline.</p>
+    <p class="muted">Kept: activity name, duration, strain, max/avg heart rate, HR-zone shares; per day: Day Strain,
+      resting/max/avg heart rate. Days are numbered 0, 1, 2… instead of dated.<br>
+      Dropped: all dates and times, sleep, HRV, recovery, skin temperature, SpO₂ and the journal.</p>
+  </div>
+
+  <div class="card">
+    <h2><span class="step">1</span>Get your WHOOP export</h2>
+    <p>Request your data export in the WHOOP app (Data Export). WHOOP sends you a ZIP file. You don't need to unzip it.</p>
+  </div>
+
+  <div class="card">
+    <h2><span class="step">2</span>Choose the ZIP file</h2>
+    <label id="drop">
+      <input id="file" type="file" accept=".zip,application/zip">
+      <strong>Drop your WHOOP ZIP here</strong><br><span class="muted">or tap to choose it</span>
+    </label>
+    <div id="status" aria-live="polite"></div>
+  </div>
+
+  <div class="card off" id="review">
+    <h2><span class="step">3</span>Check and download the two files</h2>
+    <p class="muted">These are the complete contents that would be shared. Please look through them.</p>
+    <div id="previews"></div>
+    <button id="dlW">Download whoop_workouts_shared.csv</button>
+    <button id="dlD">Download whoop_days_shared.csv</button>
+  </div>
+
+  <div class="card off" id="questions">
+    <h2><span class="step">4</span>A few questions</h2>
+    <p class="muted">The export can't tell these apart, and they decide whether your workouts can be used for the curve.</p>
+    <label class="q" for="maxhr">Max HR setting in WHOOP</label>
+    <div class="opts">
+      <label><input type="radio" name="maxmode" value="auto" checked> auto</label>
+      <label><input type="radio" name="maxmode" value="manual"> manual:</label>
+      <input id="maxhr" type="text" inputmode="numeric" size="5" placeholder="bpm">
+      <label><input type="radio" name="maxmode" value="not sure"> not sure</label>
+    </div>
+    <label class="q">Custom HR zones in WHOOP?</label>
+    <div class="opts" data-q="zones">
+      <label><input type="radio" name="zones" value="no" checked> no</label>
+      <label><input type="radio" name="zones" value="yes"> yes</label>
+      <label><input type="radio" name="zones" value="not sure"> not sure</label>
+    </div>
+    <label class="q">Workouts imported from another device (Strava, a watch, Apple Health)?</label>
+    <div class="opts">
+      <label><input type="radio" name="imported" value="no" checked> no</label>
+      <label><input type="radio" name="imported" value="yes"> yes</label>
+      <label><input type="radio" name="imported" value="not sure"> not sure</label>
+    </div>
+    <label class="q" for="strap">Strap model</label>
+    <input id="strap" type="text" placeholder="4.0 / 5.0 / MG, or several">
+    <label class="q" for="sports">Main sports <span class="muted">(optional)</span></label>
+    <input id="sports" type="text" placeholder="e.g. running, cycling, weightlifting">
+  </div>
+
+  <div class="card off" id="post">
+    <h2><span class="step">5</span>Post it</h2>
+    <p>Copy this text into a new comment on <a href="https://github.com/ryanbr/noop/issues/2438">#2438</a> and attach both files.
+      The comment is public.</p>
+    <textarea id="comment" readonly></textarea>
+    <button id="copy">Copy text</button>
+    <a class="button" href="https://github.com/ryanbr/noop/issues/2438">Open the issue</a>
+  </div>
+
+  <p class="muted">Prefer a terminal? The same logic is available as a Python script in the first post of
+    <a href="https://github.com/ryanbr/noop/issues/2438">#2438</a>. This page and the script produce identical files.
+    Source of this page: <a href="https://github.com/DX23876/effort-calibration">DX23876/effort-calibration</a>.</p>
+</main>
+
+<script id="core">
+// Same logic as whoop_strain_share.py v4. Keep the two in step: they must produce byte-identical files.
+const ALIASES = {
+  cycle_start: ["cycle_start_time", "startzeit_des_zyklus", "hora_de_inicio_del_ciclo", "heure_de_debut_du_cycle", "hora_de_inicio_do_ciclo"],
+  activity_name: ["activity_name", "name_der_aktivitat", "nombre_de_la_actividad", "nom_de_l_activite", "nome_da_atividade"],
+  activity_strain: ["activity_strain", "aktivitatsbelastung", "esfuerzo_de_la_actividad", "effort_activite", "esforco_da_atividade"],
+  workout_start: ["workout_start_time", "startzeit_des_trainings", "hora_de_inicio_del_entrenamiento", "heure_de_debut_de_l_entrainement", "hora_de_inicio_do_treino"],
+  workout_end: ["workout_end_time", "endzeit_des_trainings", "hora_de_finalizacion_del_entrenamiento", "heure_de_fin_de_l_entrainement", "hora_de_fim_do_treino"],
+  duration: ["duration_min", "dauer_min", "duracion_min", "duree_min", "duracao_min"],
+  max_hr: ["max_hr_bpm", "max_hf_schlage_pro_minute", "fc_max_lpm", "fc_max_bpm"],
+  avg_hr: ["average_hr_bpm", "durchschnittliche_hf_schlage_pro_minute", "fc_promedio_lpm", "fc_moyenne_bpm", "fc_media_bpm"],
+  day_strain: ["day_strain", "tagesbelastung", "esfuerzo_del_dia", "effort_du_jour", "esforco_diario"],
+  resting_hr: ["resting_heart_rate_bpm", "ruheherzfrequenz_schlage_pro_minute", "frecuencia_cardiaca_en_reposo_lpm", "frequence_cardiaque_au_repos_bpm", "frequencia_cardiaca_em_repouso_bpm"],
+};
+const KNOWN_LAYOUTS = {
+  workouts: [17, 11, { cycle_start: 0, workout_start: 3, workout_end: 4, duration: 5, activity_name: 6,
+                       activity_strain: 7, max_hr: 9, avg_hr: 10, z1: 11, z2: 12, z3: 13, z4: 14, z5: 15 }],
+  cycles: [26, 3, { cycle_start: 0, resting_hr: 4, day_strain: 8, max_hr: 10, avg_hr: 11 }],
+};
+
+function norm(h) {
+  h = h.replace(/﻿/g, "").normalize("NFKD").replace(/\p{Mn}/gu, "").toLowerCase().replaceAll("%", "pct");
+  return h.replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+function columns(header) {
+  const keys = header.map(norm), found = {};
+  for (const [f, names] of Object.entries(ALIASES))
+    for (const a of names) { const i = keys.indexOf(a); if (i >= 0) found[f] = i; }
+  keys.forEach((k, i) => {
+    const m = k.match(/zon[ae]?_(?:[a-z]+_)*([1-5])_(?:[a-z]+_)*pct$/);
+    if (m) found["z" + m[1]] = i;
+  });
+  if (!("cycle_start" in found)) found.cycle_start = 0;
+  return found;
+}
+
+// Python csv.reader (excel dialect) semantics, enough for WHOOP exports.
+function parseCsv(text, delim) {
+  const rows = []; let row = [], field = "", quoted = false, inQuotes = false, i = 0;
+  const endField = () => { row.push(field); field = ""; quoted = false; };
+  const endRow = () => { endField(); if (!(row.length === 1 && row[0] === "" && !rowHadContent)) rows.push(row); row = []; rowHadContent = false; };
+  let rowHadContent = false;
+  while (i < text.length) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQuotes = false; }
+      else field += c;
+    } else if (c === '"' && field === "" && !quoted) { inQuotes = true; quoted = true; rowHadContent = true; }
+    else if (c === delim) { endField(); rowHadContent = true; }
+    else if (c === "\r" || c === "\n") { if (c === "\r" && text[i + 1] === "\n") i++; endRow(); }
+    else { field += c; rowHadContent = true; }
+    i++;
+  }
+  if (field !== "" || row.length || quoted) endRow();
+  return rows.filter(r => r.length);
+}
+
+function readCsv(text) {
+  const first = text.split("\n", 1)[0];
+  const count = ch => first.split(ch).length - 1;
+  return parseCsv(text, count(";") > count(",") ? ";" : ",");
+}
+
+function cell(r, c, key) {
+  const i = c[key];
+  return i !== undefined && i < r.length ? r[i] : "";
+}
+
+function stamp(s) {
+  const m = s.trim().slice(0, 19).match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?: (\d{1,2}):(\d{1,2})(?::(\d{1,2}))?|T(\d{1,2}):(\d{1,2}):(\d{1,2}))$/);
+  if (!m) return null;
+  const [y, mo, d] = [m[1], m[2], m[3]].map(Number);
+  const [h, mi, se] = (m[4] !== undefined ? [m[4], m[5], m[6]] : [m[7], m[8], m[9]]).map(x => Number(x || 0));
+  const t = new Date(Date.UTC(2000, 0, 1)); t.setUTCFullYear(y, mo - 1, d); t.setUTCHours(h, mi, se, 0);
+  if (y < 1 || t.getUTCFullYear() !== y || t.getUTCMonth() !== mo - 1 || t.getUTCDate() !== d ||
+      t.getUTCHours() !== h || t.getUTCMinutes() !== mi || t.getUTCSeconds() !== se) return null;
+  return Math.round(t.getTime() / 1000);
+}
+
+function minutes(r, c) {
+  const t0 = stamp(cell(r, c, "workout_start")), t1 = stamp(cell(r, c, "workout_end"));
+  if (t0 === null || t1 === null) return cell(r, c, "duration");
+  if (t1 < t0) return "";
+  const tenths = Math.floor(((t1 - t0) * 10 + 30) / 60);
+  return `${Math.floor(tenths / 10)}.${tenths % 10}`;
+}
+
+// Python csv.writer: QUOTE_MINIMAL, "\r\n" line ends.
+function toCsv(rows) {
+  const q = v => { v = String(v); return /[",\r\n]/.test(v) ? '"' + v.replaceAll('"', '""') + '"' : v; };
+  return rows.map(r => r.map(q).join(",") + "\r\n").join("");
+}
+
+async function unzip(buf) {
+  const u8 = new Uint8Array(buf), dv = new DataView(buf);
+  let eocd = -1;
+  for (let i = u8.length - 22; i >= Math.max(0, u8.length - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  if (eocd < 0) throw new Error("This doesn't look like a ZIP file.");
+  const count = dv.getUint16(eocd + 10, true); let p = dv.getUint32(eocd + 16, true);
+  if (count === 0xffff || p === 0xffffffff) throw new Error("This ZIP format (ZIP64) is not supported.");
+  const out = [];
+  for (let n = 0; n < count; n++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) throw new Error("The ZIP file looks damaged.");
+    const method = dv.getUint16(p + 10, true), size = dv.getUint32(p + 20, true);
+    const nl = dv.getUint16(p + 28, true), el = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true);
+    const local = dv.getUint32(p + 42, true);
+    const name = new TextDecoder().decode(u8.subarray(p + 46, p + 46 + nl));
+    p += 46 + nl + el + cl;
+    out.push({ name, read: async () => {
+      const start = local + 30 + dv.getUint16(local + 26, true) + dv.getUint16(local + 28, true);
+      const data = u8.subarray(start, start + size);
+      if (method === 0) return data;
+      if (method !== 8) throw new Error(`Unsupported compression in ${name}.`);
+      const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+      return new Uint8Array(await new Response(stream).arrayBuffer());
+    }});
+  }
+  return out;
+}
+
+async function processZip(buf) {
+  const entries = await unzip(buf), texts = [];
+  let workouts = null, cycles = null;
+  for (const e of entries) {
+    if (!e.name.toLowerCase().endsWith(".csv")) continue;
+    const rows = readCsv(new TextDecoder().decode(await e.read()));
+    texts.push([e.name, rows[0] || []]);
+    if (!rows.length) continue;
+    const cols = columns(rows[0]);
+    if ("activity_strain" in cols) workouts = [rows, cols];
+    else if ("day_strain" in cols) cycles = [rows, cols];
+    else for (const [kind, [n, pct, pos]] of Object.entries(KNOWN_LAYOUTS))
+      if (rows[0].length === n && rows[0][pct].includes("%") && (kind === "workouts" ? workouts : cycles) === null) {
+        if (kind === "workouts") workouts = [rows, pos]; else cycles = [rows, pos];
+      }
+  }
+  const needW = ["activity_name", "activity_strain", "max_hr", "avg_hr", "z1", "z2", "z3", "z4", "z5"];
+  const needC = ["day_strain", "resting_hr", "max_hr", "avg_hr"];
+  for (const [label, table, need] of [["workouts", workouts, needW], ["cycles", cycles, needC]]) {
+    const missing = table === null ? need.slice() : need.filter(f => !(f in table[1]));
+    if (table !== null && label === "workouts" &&
+        !(("workout_start" in table[1] && "workout_end" in table[1]) || "duration" in table[1])) missing.push("duration");
+    if (missing.length) return { error: `${label}: could not find ${missing.join(", ")}`, headers: texts };
+  }
+  const [wr, wc] = workouts, [cr, cc] = cycles;
+  const starts = [...new Set(cr.slice(1).map(r => cell(r, cc, "cycle_start")))].sort();
+  const dayId = new Map(starts.map((s, i) => [s, i]));
+  const w = [["day", "activity", "duration_min", "strain", "max_hr", "avg_hr", "z1", "z2", "z3", "z4", "z5"]];
+  for (const r of wr.slice(1)) {
+    const id = dayId.get(cell(r, wc, "cycle_start"));
+    w.push([id === undefined ? "" : id, cell(r, wc, "activity_name"), minutes(r, wc),
+      ...["activity_strain", "max_hr", "avg_hr", "z1", "z2", "z3", "z4", "z5"].map(k => cell(r, wc, k))]);
+  }
+  const d = [["day", "day_strain", "resting_hr", "max_hr", "avg_hr"]];
+  for (const r of cr.slice(1))
+    if (cell(r, cc, "day_strain")) d.push([dayId.get(cell(r, cc, "cycle_start")), ...["day_strain", "resting_hr", "max_hr", "avg_hr"].map(k => cell(r, cc, k))]);
+  return { workouts: toCsv(w), days: toCsv(d), nWorkouts: w.length - 1, nDays: d.length - 1, wRows: w, dRows: d };
+}
+if (typeof module !== "undefined") module.exports = { processZip };
+</script>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  let result = null;
+
+  const status = (html, cls) => { $("status").innerHTML = `<p class="${cls || ""}">${html}</p>`; };
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+  function table(rows, title) {
+    const left = rows[0].map((_, i) => rows.slice(1).some(r => r[i] !== "" && isNaN(Number(r[i]))));
+    const cls = i => left[i] ? ' class="l"' : "";
+    const head = rows[0].map((h, i) => `<th${cls(i)}>${esc(h)}</th>`).join("");
+    const body = rows.slice(1).map(r => `<tr>${r.map((v, i) => `<td${cls(i)}>${esc(v)}</td>`).join("")}</tr>`).join("");
+    return `<p><strong>${esc(title)}</strong> <span class="muted">(${rows.length - 1} rows)</span></p>
+      <div class="scroll" style="max-height:260px"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+  }
+
+  function download(text, name) {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([text], { type: "text/csv" }));
+    a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  function comment() {
+    const v = n => (document.querySelector(`input[name=${n}]:checked`) || {}).value || "-";
+    let max = v("maxmode");
+    if (max === "manual") max = `manual ${$("maxhr").value.trim() || "?"}`;
+    const lines = [
+      "WHOOP export, shared with the Effort calibration page (same output as whoop_strain_share.py v4).", "",
+      `- Max HR setting in WHOOP: ${max}`,
+      `- Custom HR zones in WHOOP: ${v("zones")}`,
+      `- Workouts imported from another device (Strava, a watch, Apple Health): ${v("imported")}`,
+      `- Strap model: ${$("strap").value.trim() || "-"}`,
+      `- Main sports: ${$("sports").value.trim() || "-"}`, "",
+      "If your NOOP build includes #2459, paste your `effort calib` lines below.",
+    ];
+    $("comment").value = lines.join("\n");
+  }
+
+  async function handle(file) {
+    for (const id of ["review", "questions", "post"]) $(id).classList.add("off");
+    if (typeof DecompressionStream === "undefined") {
+      status("Your browser is too old for this page. Please use a current Chrome, Edge, Firefox or Safari, or the Python script.", "err");
+      return;
+    }
+    status("Reading " + esc(file.name) + " …");
+    try {
+      result = await processZip(await file.arrayBuffer());
+    } catch (e) { status(esc(e.message), "err"); return; }
+    if (result.error) {
+      status(`${esc(result.error)}. Your export's column headers are listed below (no data). Please post them in
+        <a href="https://github.com/ryanbr/noop/issues/2438">#2438</a> so your export language can be added.
+        <pre>${esc(result.headers.map(([n, h]) => n + " -> " + JSON.stringify(h)).join("\n"))}</pre>`, "err");
+      return;
+    }
+    status(`Found ${result.nWorkouts} workouts and ${result.nDays} scored days.`, "ok");
+    $("previews").innerHTML = table(result.wRows, "whoop_workouts_shared.csv") + table(result.dRows, "whoop_days_shared.csv");
+    for (const id of ["review", "questions", "post"]) $(id).classList.remove("off");
+    comment();
+  }
+
+  $("file").addEventListener("change", e => e.target.files[0] && handle(e.target.files[0]));
+  const drop = $("drop");
+  drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); e.dataTransfer.files[0] && handle(e.dataTransfer.files[0]); });
+  $("dlW").addEventListener("click", () => download(result.workouts, "whoop_workouts_shared.csv"));
+  $("dlD").addEventListener("click", () => download(result.days, "whoop_days_shared.csv"));
+  document.querySelectorAll("#questions input").forEach(el => el.addEventListener("input", comment));
+  $("maxhr").addEventListener("focus", () => { document.querySelector("input[name=maxmode][value=manual]").checked = true; comment(); });
+  $("copy").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText($("comment").value); $("copy").textContent = "Copied"; }
+    catch { $("comment").select(); document.execCommand("copy"); $("copy").textContent = "Copied"; }
+    setTimeout(() => ($("copy").textContent = "Copy text"), 1500);
+  });
+})();
+</script>
+</body>
+</html>
