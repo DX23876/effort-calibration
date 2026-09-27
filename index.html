@@ -160,6 +160,8 @@ pre { white-space: pre-wrap; background: var(--code); padding: 10px; border-radi
         <label>Z4 <input id="zb4" type="text" inputmode="numeric" size="4"></label>
         <label>Z5 <input id="zb5" type="text" inputmode="numeric" size="4"></label>
       </div>
+      <label class="muted" for="zsince">Set since (year and month, e.g. 2026-06; leave empty if always)</label><br>
+      <input id="zsince" type="text" size="8" placeholder="YYYY-MM">
     </div>
     <label class="q">Workouts imported from another device (Strava, a watch, Apple Health)?</label>
     <div class="opts">
@@ -188,7 +190,7 @@ pre { white-space: pre-wrap; background: var(--code); padding: 10px; border-radi
 </main>
 
 <script id="core">
-// Same logic as whoop_strain_share.py v5. Keep the two in step: they must produce byte-identical files.
+// Same logic as whoop_strain_share.py v5.1. Keep the two in step: they must produce byte-identical files.
 const ALIASES = {
   cycle_start: ["cycle_start_time", "startzeit_des_zyklus", "hora_de_inicio_del_ciclo", "heure_de_debut_du_cycle", "hora_de_inicio_do_ciclo"],
   activity_name: ["activity_name", "name_der_aktivitat", "nombre_de_la_actividad", "nom_de_l_activite", "nome_da_atividade"],
@@ -317,7 +319,9 @@ async function processZip(buf) {
   const entries = await unzip(buf), texts = [];
   let workouts = null, cycles = null;
   for (const e of entries) {
-    if (!e.name.toLowerCase().endsWith(".csv")) continue;
+    const base = e.name.split("/").pop();
+    // macOS Finder adds __MACOSX/._name.csv resource forks when it re-zips; they are binary, not CSV.
+    if (!e.name.toLowerCase().endsWith(".csv") || e.name.startsWith("__MACOSX/") || base.startsWith("._")) continue;
     const rows = readCsv(new TextDecoder().decode(await e.read()));
     texts.push([e.name, rows[0] || []]);
     if (!rows.length) continue;
@@ -329,7 +333,7 @@ async function processZip(buf) {
         if (kind === "workouts") workouts = [rows, pos]; else cycles = [rows, pos];
       }
   }
-  const needW = ["activity_name", "activity_strain", "max_hr", "avg_hr", "z1", "z2", "z3", "z4", "z5"];
+  const needW = ["activity_strain", "max_hr", "avg_hr", "z1", "z2", "z3", "z4", "z5"]; // some exports have no activity name
   const needC = ["day_strain", "resting_hr", "max_hr", "avg_hr"];
   for (const [label, table, need] of [["workouts", workouts, needW], ["cycles", cycles, needC]]) {
     const missing = table === null ? need.slice() : need.filter(f => !(f in table[1]));
@@ -385,11 +389,12 @@ if (typeof module !== "undefined") module.exports = { processZip };
     let zones = v("zones");
     $("zonebounds").hidden = zones !== "yes";
     if (zones === "yes")
-      zones = "yes, lower bounds (bpm): " + [1, 2, 3, 4, 5].map(i => `Z${i} ${$("zb" + i).value.trim() || "?"}`).join(", ");
+      zones = "yes" + ($("zsince").value.trim() ? ` since ${$("zsince").value.trim()}` : "") + ", lower bounds (bpm): "
+        + [1, 2, 3, 4, 5].map(i => `Z${i} ${$("zb" + i).value.trim() || "?"}`).join(", ");
     let max = v("maxmode");
     if (max === "manual") max = `manual ${$("maxhr").value.trim() || "?"}`;
     const lines = [
-      "WHOOP export, shared with the Effort calibration page (same output as whoop_strain_share.py v5).", "",
+      "WHOOP export, shared with the Effort calibration page (same output as whoop_strain_share.py v5.1).", "",
       `- Max HR setting in WHOOP: ${max}`,
       `- Custom HR zones in WHOOP: ${zones}`,
       `- Workouts imported from another device (Strava, a watch, Apple Health): ${v("imported")}`,

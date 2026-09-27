@@ -1,4 +1,4 @@
-# v5 - Reduces a WHOOP data export to the few columns needed to calibrate Effort.
+# v5.1 - Reduces a WHOOP data export to the few columns needed to calibrate Effort.
 # Keeps: year and month, activity name, duration, strain values, HR-zone shares and heart rates.
 # Drops: exact dates and times, sleep, HRV, recovery, skin temp, SpO2, journal.
 # Year and month stay because WHOOP changed how it defines its zones at a fixed point in time.
@@ -73,8 +73,13 @@ def minutes(r, c):
 
 z = zipfile.ZipFile(sys.argv[1])
 workouts = cycles = None
+def is_export_csv(name):
+    # macOS Finder adds __MACOSX/._name.csv resource forks when it re-zips; they are binary, not CSV.
+    base = name.rsplit("/", 1)[-1]
+    return name.lower().endswith(".csv") and not name.startswith("__MACOSX/") and not base.startswith("._")
+
 for name in z.namelist():
-    if not name.lower().endswith(".csv"): continue
+    if not is_export_csv(name): continue
     rows = read(name)
     if not rows: continue
     cols = columns(rows[0])
@@ -86,7 +91,7 @@ for name in z.namelist():
                 if kind == "workouts": workouts = (rows, pos)
                 else: cycles = (rows, pos)
 
-need_w = ["activity_name", "activity_strain", "max_hr", "avg_hr", "z1", "z2", "z3", "z4", "z5"]
+need_w = ["activity_strain", "max_hr", "avg_hr", "z1", "z2", "z3", "z4", "z5"]  # some exports have no activity name
 need_c = ["day_strain", "resting_hr", "max_hr", "avg_hr"]
 for label, table, need in (("workouts", workouts, need_w), ("cycles", cycles, need_c)):
     missing = need if table is None else [f for f in need if f not in table[1]]
@@ -95,7 +100,7 @@ for label, table, need in (("workouts", workouts, need_w), ("cycles", cycles, ne
     if missing:
         print(f"{label}: could not find {missing}. Please post the header lines of your export in the issue:")
         for name in z.namelist():
-            if name.lower().endswith(".csv"):
+            if is_export_csv(name):
                 print(" ", name, "->", (read(name) or [[]])[0])
         sys.exit(1)
 
@@ -131,10 +136,12 @@ try:
         if q.startswith("Custom HR zones") and answers[-1].lower().startswith("y"):
             bounds = input("  Lower bound of zones 1-5 in bpm, as shown in the WHOOP app (e.g. 122 140 152 165 178): ").split()
             bounds += ["?"] * (5 - len(bounds))
-            answers[-1] = "yes, lower bounds (bpm): " + ", ".join(f"Z{i} {v}" for i, v in enumerate(bounds[:5], 1))
+            since = input("  Custom zones set since (year-month, e.g. 2026-06; leave empty if always): ").strip()
+            answers[-1] = ("yes" + (f" since {since}" if since else "") + ", lower bounds (bpm): "
+                           + ", ".join(f"Z{i} {v}" for i, v in enumerate(bounds[:5], 1)))
 except EOFError:
     answers += ["-"] * (len(QUESTIONS) - len(answers))
 print("\n--- copy this into your comment on https://github.com/ryanbr/noop/issues/2438 and attach both files ---\n")
-print("WHOOP export, shared with whoop_strain_share.py v5.\n")
+print("WHOOP export, shared with whoop_strain_share.py v5.1.\n")
 for (q, _), a in zip(QUESTIONS, answers): print(f"- {q}: {a}")
 print("\nIf your NOOP build includes #2459, paste your `effort calib` lines below.")

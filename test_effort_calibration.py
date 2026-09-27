@@ -174,5 +174,80 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("Marathon", text)
 
 
+class ReviewFixes(unittest.TestCase):
+    def test_zones_since_and_sports_are_parsed(self):
+        info = ec.parse_info("- Custom HR zones in WHOOP: yes since 2026-6, lower bounds (bpm): Z1 122, Z2 140, Z3 152, Z4 165, Z5 178\n"
+                             "- Main sports: walking, golf\n")
+        self.assertEqual((info["zones_since"], info["sports"]), ("2026-06", "walking, golf"))
+
+    def test_generic_names(self):
+        for name in ("Activity", "Other", "Aktivität", "Sonstiges", ""):
+            self.assertTrue(ec.is_generic(name), name)
+        self.assertFalse(ec.is_generic("Running"))
+
+    def rows(self, activity="Activity", rhr="60", month="2026-01"):
+        workouts = [{"day": "1", "month": month, "activity": activity, "duration_min": "30", "strain": "8.0",
+                     "max_hr": "170", "avg_hr": "140", "z1": "20", "z2": "30", "z3": "30", "z4": "10", "z5": "0"}]
+        days = [{"day": "1", "month": month, "day_strain": "9", "resting_hr": rhr, "max_hr": "180", "avg_hr": "80"}]
+        return workouts, days
+
+    def test_generic_names_are_kept_and_counted(self):
+        w, d = self.rows()
+        kept, skipped, _ = ec.prepare("x", w, d, ec.parse_info("- Main sports: Weightlifting\n"))
+        self.assertEqual((len(kept), skipped["generic name, kept"]), (1, 1))
+
+    def test_export_without_names_is_scored_but_never_trains(self):
+        self.assertTrue(ec.has_no_names([{"activity": ""}, {"activity": " "}]))
+        self.assertFalse(ec.has_no_names([{"activity": ""}, {"activity": "Running"}]))
+        truth = {"a": 5.4, "k": 13.0, "beta": 0.6, "w0": 0.5, "p": ec.P_CAP}
+        off = {"a": 9.0, "k": 5.0, "beta": 0.9, "w0": 0.9, "p": ec.P_CAP}  # would pull any fit it trains
+        people = {"a": synthetic_workouts(truth, 160, seed=1, person="a"),
+                  "b": synthetic_workouts(truth, 160, seed=2, person="b"),
+                  "odd": synthetic_workouts(off, 160, seed=3, person="odd")}
+        with_odd = ec.leave_one_out(people, starts=1)
+        without = ec.leave_one_out(people, unverified={"odd"}, starts=1)
+        self.assertIn("odd", without)  # still scored
+        self.assertLess(without["a"]["rmse_new"], with_odd["a"]["rmse_new"])
+
+    def test_missing_resting_hr_is_never_substituted(self):
+        bounds = "- Custom HR zones in WHOOP: yes, lower bounds (bpm): Z1 122, Z2 140, Z3 152, Z4 165, Z5 178\n"
+        w, d = self.rows(activity="Running", rhr="")
+        kept, skipped, _ = ec.prepare("x", w, d, ec.parse_info(bounds))
+        self.assertEqual((len(kept), skipped["no resting HR where needed"]), (0, 1))
+        # WHOOP's own HRR zones need no resting HR: the row is kept.
+        kept, skipped, _ = ec.prepare("x", w, d, ec.parse_info(""))
+        self.assertEqual(len(kept), 1)
+
+    def test_custom_zones_only_from_their_month(self):
+        info = ec.parse_info("- Custom HR zones in WHOOP: yes since 2026-06, lower bounds (bpm): Z1 100, Z2 110, Z3 120, Z4 130, Z5 140\n")
+        before, _ = self.rows(activity="Running", month="2026-01")
+        after, d = self.rows(activity="Running", month="2026-07")
+        kept_before, _, _ = ec.prepare("x", before, d, info)
+        kept_after, _, _ = ec.prepare("x", after, d, info)
+        self.assertEqual(kept_before[0]["mids"], ec.DEFAULT_MIDPOINTS)
+        self.assertNotEqual(kept_after[0]["mids"], ec.DEFAULT_MIDPOINTS)
+
+    def test_passes_at_full_band_agreement(self):
+        self.assertTrue(ec.passes({"rmse_new": 0.5, "rmse_today": 1.0, "bands_new": 1.0, "bands_today": 1.0}))
+        self.assertFalse(ec.passes({"rmse_new": 1.5, "rmse_today": 1.0, "bands_new": 1.0, "bands_today": 1.0}))
+
+    def test_small_training_set_is_flagged(self):
+        truth = {"a": 5.4, "k": 13.0, "beta": 0.6, "w0": 0.5, "p": ec.P_CAP}
+        people = {"big": synthetic_workouts(truth, 160, seed=1, person="big"),
+                  "tiny": synthetic_workouts(truth, 3, seed=2, person="tiny")}
+        results = ec.leave_one_out(people, starts=1)
+        self.assertTrue(results["big"]["small_training_set"])
+        self.assertFalse(results["tiny"]["small_training_set"])
+
+    def test_unweighted_fit_leaves_hard_workouts_low(self):
+        truth = {"a": 5.4, "k": 13.0, "beta": 0.6, "w0": 0.5, "p": ec.P_CAP}
+        data = synthetic_workouts(truth, 240, seed=7)
+        light = [w for w in data if ec.band(w["strain"]) == "light"]
+        hard = [w for w in data if w["strain"] >= 14]
+        data = light * 8 + hard
+        balanced = ec.evaluate(data, ec.fit(data, starts=2))["top_bias_new"]
+        self.assertLess(abs(balanced), 0.5)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -26,7 +26,7 @@ Or run the same logic as a script: `python3 whoop_strain_share.py my_whoop_data.
   `python3 effort_calibration.py DATA_DIR` reads one folder per contributor
   (`whoop_workouts_shared.csv`, `whoop_days_shared.csv`, optional `info.txt` with the comment text) and prints a
   Markdown report.
-- `test_effort_calibration.py`: `python3 -m unittest test_effort_calibration`.
+- `test_effort_calibration.py`: `python3 -m unittest test_effort_calibration` (26 tests).
 - `dev/xcheck_scipy.py`: checks that the dependency-free optimiser finds the same minimum as scipy (needs scipy).
 
 ## Method
@@ -36,18 +36,27 @@ Or run the same logic as a script: `python3 whoop_strain_share.py my_whoop_data.
   approached but never reached. Fitted: a, k, β and w0 (0 ≤ w0 ≤ 1).
 - **Loss:** Huber, with every WHOOP band (light / moderate / high / all-out) carrying the same total weight, so the
   few hard workouts are not drowned out by the many light ones.
-- **Left out:** strength sessions (WHOOP adds muscular load to their strain), incomplete rows, and workouts with
-  custom zones but no zone bounds. Custom zones with bounds are placed at their real intensity.
+- **Left out:** strength sessions by name (WHOOP adds muscular load to Strength Trainer sessions), incomplete rows,
+  custom zones without zone bounds, and rows that need a resting heart rate the export does not have. A missing
+  resting heart rate is never substituted.
+- **Generic names** (`Activity`, `Other` and their translations) are kept and checked: the report compares their
+  residuals with the same contributor's named workouts and flags anyone whose generic workouts sit more than a point
+  above. An export with no activity names at all is marked *cardio-unverified*: it is scored but never trains a fit.
+- **Custom zones** apply from the month given ("since"). Before that, WHOOP's own zones are used.
 - **WHOOP's zone change:** older exports define zones as % of max heart rate, newer ones as % of heart-rate
   reserve. The switch is found per contributor from the data (a workout's average heart rate against what its
   zone shares imply under either definition), and older workouts are moved to their real intensity. WHOOP's max
   heart rate is taken as the second-highest daily maximum over the trailing 90 days, which matched WHOOP's own
   zones far better than one value for all years.
 - **Validation:** each contributor is scored by a fit made without their data (leave-one-out). The new curve has
-  to beat today's formula for every contributor, and put more workouts in WHOOP's band. With a single
-  contributor, the older half of the days is used to fit and the newer half to score, as a method check only.
+  to beat today's formula for every contributor on error, with band agreement at least as high as today. Rows whose
+  training set is small are flagged. With a single contributor, the older half of the days is used to fit and the
+  newer half to score, as a method check only.
+- **Sensitivity** (in every report): leave-one-out with and without band weighting and with p = 4, 6 and 8, the
+  parameters of each leave-one-out fit, and a bootstrap limited to the workouts at 14+.
 
-Both find columns by header name (English, German, Spanish, French, Portuguese) and fall back to the
-current export layout for other app languages.
+The page and the script find columns by header name (English, German, Spanish, French, Portuguese), fall back
+to the current export layout for other app languages, accept exports without an activity name column and skip the
+`__MACOSX` entries that macOS Finder adds when it re-zips.
 
 NOOP is not affiliated with WHOOP. WHOOP is named only to describe the export this tool reads.
