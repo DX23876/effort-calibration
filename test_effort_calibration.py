@@ -303,12 +303,13 @@ class ProposedModel(unittest.TestCase):
     def test_current_zones_only_ignores_converted_older_zones(self):
         data = synthetic_workouts(TRUTH, 240, seed=5)
         odd = [dict(w, old_zones=True, strain=min(20.9, w["strain"] + 6)) for w in data[:120]]
-        got = ec.fit(data + odd, starts=2)
-        clean = ec.fit(data, starts=2)
+        current = dict(ec.PROPOSED, train="current zones")
+        got = ec.fit(data + odd, spec=current, starts=2)
+        clean = ec.fit(data, spec=current, starts=2)
         for name, minutes in ec.SCENARIOS:
             self.assertAlmostEqual(ec.scenario(minutes, got)[1], ec.scenario(minutes, clean)[1], places=6, msg=name)
         # Trained on all zones, the same odd workouts do move the curve: the filter is what keeps it out.
-        pulled = ec.fit(data + odd, spec=dict(ec.PROPOSED, train="all"), starts=2)
+        pulled = ec.fit(data + odd, spec=dict(current, train="all"), starts=2)
         moved = max(abs(ec.scenario(m, pulled)[1] - ec.scenario(m, clean)[1]) for _, m in ec.SCENARIOS)
         self.assertGreater(moved, 0.2)  # the Huber loss limits how far outliers pull
 
@@ -320,6 +321,23 @@ class ProposedModel(unittest.TestCase):
         by_person = ec.scenario(hour, ec.fit(big + small, spec=dict(ec.PROPOSED, people="equal"), starts=2))[1]
         target = ec.scenario(hour, params(a=6.5, k=13.0, beta=0.6))[1]
         self.assertLess(abs(by_person - target), abs(by_workout - target))
+
+    def test_one_switch_date_for_everyone_when_months_are_known(self):
+        def workout(day, month):
+            return {"day": str(day), "month": month, "activity": "Running", "duration_min": "40", "strain": "9.0",
+                    "max_hr": "170", "avg_hr": "150", "z1": "10", "z2": "30", "z3": "40", "z4": "15", "z5": "0"}
+        months = ["2024-06", "2024-10", "2024-11", "2025-03"]
+        workouts = [workout(i, m) for i, m in enumerate(months)]
+        days = [{"day": str(i), "month": m, "day_strain": "10", "resting_hr": "55", "max_hr": "185", "avg_hr": "70"}
+                for i, m in enumerate(months)]
+        kept, _, (switch, _, how) = ec.prepare("x", workouts, days, ec.parse_info(""))
+        self.assertEqual(how, "month")
+        self.assertEqual([w["old_zones"] for w in kept], [True, True, False, False])
+        # Without months (share script v4 and older) the switch is still searched in the data.
+        for w in workouts + days:
+            w["month"] = ""
+        _, _, (_, _, how) = ec.prepare("x", workouts, days, ec.parse_info(""))
+        self.assertEqual(how, "detected")
 
     def test_every_variant_fits(self):
         data = synthetic_workouts(TRUTH, 160, seed=9)

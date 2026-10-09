@@ -23,12 +23,10 @@ Fitted: a, k and beta. The floor (20 % HRR) and the cap exponent are fixed desig
 with their alternatives in the variant table. WHOOP scores workouts that stay close to resting heart
 rate as 0; the floor reproduces that without a separate weight for the time below zone 1.
 
-WHOOP changed how it defines its zones: older exports use % of max heart rate, newer ones % of
-heart-rate reserve, and not on the same date for every account. The export carries no dates, so each
-contributor's switch is found from the data: the average heart rate of a workout is compared with
-what its zone shares imply under either definition, and the single change point that fits best is
-used. Only workouts in the current definition train the proposed fit, because converting older zones
-needs an estimated max heart rate. Older workouts are converted and scored, so they still check it.
+WHOOP changed how it defines its zones in 2024: older workouts use % of max heart rate, newer ones % of
+heart-rate reserve. The switch is taken as WHOOP_HRR_SINCE (2024-11) for everyone; only exports without
+months fall back to finding it in the data. Older workouts are moved to their real intensity with the
+max heart rate and resting heart rate of their day.
 
 Every WHOOP band (light, moderate, high, all-out) carries the same total weight in the loss, so the
 rare hard workouts are not drowned out by the many light ones. Today's formula is Edwards (weights
@@ -158,8 +156,19 @@ def _implied_avg(shares, mids_bpm):
     inside = sum(shares)
     return sum(s * m for s, m in zip(shares, mids_bpm)) / inside if inside else None
 
+# WHOOP moved its zones from % of max HR to % of HR reserve in 2024. One date for every export: the only export
+# with workouts on both sides and no gap switches in 2024-11, and on the others a single date fits better than a
+# change point found per export (that search leans on an estimated max HR and misplaced a whole 2026 export).
+WHOOP_HRR_SINCE = "2024-11"
+
+def _months_known(workouts):
+    return bool(workouts) and all(re.fullmatch(r"\d{4}-\d{2}", (w.get("month") or "")) for w in workouts)
+
 def find_zone_switch(rows):
     """Index (in day order) where WHOOP's zones switch from % of max HR to % of HR reserve.
+
+    Fallback for exports without months only (share script v4 and older); with months the switch is
+    WHOOP_HRR_SINCE for everyone.
 
     rows: (day, shares 0-1, avg_hr, rhr, hrmax). Uses only workouts that sit almost entirely inside zones
     1-5, where the zone shares pin down the average heart rate. Returns (switch_day, gain) where gain
@@ -218,10 +227,15 @@ def prepare(person, workouts, days, info):
     hrmax_on = lambda day: manual or trailing(day)
     # Custom zones apply from the month they were set; before that, WHOOP's own zones were in force.
     custom_on = lambda w: info["zones"] == "yes" and (not info["zones_since"] or (w.get("month") or "") >= info["zones_since"])
-    switch_day, switch_gain = find_zone_switch(
-        [(_num(w.get("day")), [(_num(w.get(f"z{i}")) or 0) / 100.0 for i in range(1, 6)],
-          _num(w.get("avg_hr")), rhr_by_day.get(w.get("day")), hrmax_on(_num(w.get("day"))))
-         for w in workouts if _num(w.get("day")) is not None and not custom_on(w)])
+    if _months_known(workouts):
+        after = [_num(w.get("day")) for w in workouts if w["month"] >= WHOOP_HRR_SINCE and _num(w.get("day")) is not None]
+        switch_day, switch_gain, how = (min(after) if after else float("inf")), None, "month"
+    else:
+        switch_day, switch_gain = find_zone_switch(
+            [(_num(w.get("day")), [(_num(w.get(f"z{i}")) or 0) / 100.0 for i in range(1, 6)],
+              _num(w.get("avg_hr")), rhr_by_day.get(w.get("day")), hrmax_on(_num(w.get("day"))))
+             for w in workouts if _num(w.get("day")) is not None and not custom_on(w)])
+        how = "detected"
     # Generic names ("Activity", "Other") are kept: WHOOP's muscular load comes from Strength Trainer
     # sessions, which carry that name. Whether generic rows sit above the curve is checked in the report
     # rather than assumed.
@@ -270,7 +284,7 @@ def prepare(person, workouts, days, info):
             "edwards": minutes * sum(s * edwards_weight(x) for s, x in zip(z, mids)),
         })
     skipped["generic name, kept"] = generic_kept
-    return out, skipped, (switch_day, switch_gain)
+    return out, skipped, (switch_day, switch_gain, how)
 
 
 # ---------------------------------------------------------------- model
@@ -292,26 +306,27 @@ FLOOR_WIDTH = 3.0  # % HRR; width of the smooth step at the floor, so the loss s
 
 def _spec(**kw):
     spec = {"weights": "exp", "below": "exp", "floor": 20.0, "p": 8.0, "fitted": ["a", "k", "beta"],
-            "train": "current zones", "people": "workouts"}
+            "train": "all", "people": "workouts"}
     spec.update(kw)
     return spec
 
-# The proposed model (ryanbr/noop#2438, 2026-10): one exponential for all intensities, nothing below 20 % HRR.
+# The proposed model (ryanbr/noop#2438, 2026-10): one exponential for all intensities, nothing below 20 % HRR, cap 8.
 PROPOSED = _spec()
-# The model published on 2026-09-26: one fitted weight (w0) for all time below zone 1, cap 6, all zones.
-PUBLISHED = _spec(below="w0", floor=None, p=6.0, fitted=["a", "k", "beta", "w0"], train="all")
+# The model published on 2026-09-26: one fitted weight (w0) for all time below zone 1, cap 6.
+PUBLISHED = _spec(below="w0", floor=None, p=6.0, fitted=["a", "k", "beta", "w0"])
 
 # Every variant compared in the issue, in the order of its table (python3 effort_calibration.py DIR --variants).
 VARIANTS = [
-    ("Edwards 1 to 5, only the curve refitted", _spec(weights="edwards", below="w0", floor=None, p=6.0, fitted=["a", "k", "w0"], train="all")),
-    ("Banister weights", _spec(weights="banister", below="banister", floor=None, p=6.0, fitted=["a", "k"], train="all")),
+    ("Edwards 1 to 5, only the curve refitted", _spec(weights="edwards", below="w0", floor=None, p=6.0, fitted=["a", "k", "w0"])),
+    ("Banister weights", _spec(weights="banister", below="banister", floor=None, p=6.0, fitted=["a", "k"])),
     ("published model (w0, cap 6)", PUBLISHED),
-    ("published model, current zones only", dict(PUBLISHED, train="current zones")),
-    ("exponential below zone 1 without a floor, cap 6", _spec(floor=None, p=6.0, train="all")),
-    ("floor at 20 %, current zones, cap 6", _spec(p=6.0)),
-    ("floor at 20 %, current zones, cap 8 (proposed)", PROPOSED),
-    ("floor at 20 %, current zones, cap 10", _spec(p=10.0)),
-    ("floor at 30 %, current zones, cap 10", _spec(floor=30.0, p=10.0)),
+    ("published model, cap 8", dict(PUBLISHED, p=8.0)),
+    ("exponential below zone 1 without a floor, cap 8", _spec(floor=None)),
+    ("floor at 20 %, cap 6", _spec(p=6.0)),
+    ("floor at 20 %, cap 8 (proposed)", PROPOSED),
+    ("floor at 20 %, cap 10", _spec(p=10.0)),
+    ("floor at 30 %, cap 8", _spec(floor=30.0)),
+    ("proposed, fitted on current zones only", _spec(train="current zones")),
     ("proposed, every person weighted equally", _spec(people="equal")),
 ]
 
@@ -584,8 +599,7 @@ def report(data_dir, variants=False):
     pooled = [w for p, ws in usable.items() if p not in unverified for w in ws]
     prm = fit(pooled)
     lines = ["## Effort calibration report", ""]
-    lines += [f"Contributors: {len(usable)}. Workouts scored: {sum(len(ws) for ws in usable.values())}. "
-              f"Workouts that train the fit: {len(training_rows(pooled, PROPOSED))} (WHOOP's current zones only).", ""]
+    lines += [f"Contributors: {len(usable)}. Workouts used for the fit: {len(training_rows(pooled, PROPOSED))}.", ""]
     if unverified & set(usable):
         lines += ["Marked *cardio-unverified* (export has no activity names, so strength sessions cannot be left out): "
                   + ", ".join(sorted(unverified & set(usable))) + ". They are scored below but do not train any fit.", ""]
@@ -601,7 +615,10 @@ def report(data_dir, variants=False):
         until = max((w["month"] for w in old), default="") if old else ""
         since = min((w["month"] for w in new), default="") if new else ""
         span = f", until {until} / from {since}" if until and since else ""
-        sw = f"{len(old)} workouts{span} (avg-HR fit {switches[p][1]:.0%} better)" if old else "none found"
+        if switches[p][2] == "month":
+            sw = f"{len(old)} workouts before {WHOOP_HRR_SINCE}" if old else "none"
+        else:
+            sw = f"{len(old)} workouts{span} (found from the data, avg-HR fit {switches[p][1]:.0%} better)" if old else "none found"
         zones = i["zones"] + (f" since {i['zones_since']}" if i.get("zones_since") else "")
         lines.append(f"| {p} | {len(usable[p])} | {left} | {generic} | {mx} | {zones} | {sw} |")
     for p in prepared:

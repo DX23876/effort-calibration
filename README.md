@@ -26,7 +26,7 @@ Or run the same logic as a script: `python3 whoop_strain_share.py my_whoop_data.
   `python3 effort_calibration.py DATA_DIR [--variants]` reads one folder per contributor
   (`whoop_workouts_shared.csv`, `whoop_days_shared.csv`, optional `info.txt` with the comment text) and prints a
   Markdown report.
-- `test_effort_calibration.py`: `python3 -m unittest test_effort_calibration` (34 tests).
+- `test_effort_calibration.py`: `python3 -m unittest test_effort_calibration` (35 tests).
 - `dev/xcheck_scipy.py`: checks that the dependency-free optimiser finds the same minimum as scipy (needs scipy).
 
 ## Method
@@ -36,9 +36,6 @@ Or run the same logic as a script: `python3 whoop_strain_share.py my_whoop_data.
   estimated from the workout's average heart rate, and the weight switches off below 20 % of reserve (WHOOP scores
   workouts that stay close to resting heart rate as 0). Score = 21·b / (b⁸ + 21⁸)^(1/8) with b = a·ln(1 + load/k),
   so 21 is approached but never reached. Fitted: a, k and β.
-- **Training rows:** only workouts in WHOOP's current zone definition (% of reserve) train the fit. Older workouts
-  are converted and scored, so they still check it, but no fitted number depends on converting them through an
-  estimated max heart rate.
 - **Loss:** Huber, with every WHOOP band (light / moderate / high / all-out) carrying the same total weight, so the
   few hard workouts are not drowned out by the many light ones.
 - **Left out:** strength sessions by name (WHOOP adds muscular load to Strength Trainer sessions; `Bodybuilding`
@@ -48,12 +45,13 @@ Or run the same logic as a script: `python3 whoop_strain_share.py my_whoop_data.
   residuals with the same contributor's named workouts and flags anyone whose generic workouts sit more than a point
   above. An export with no activity names at all is marked *cardio-unverified*: it is scored but never trains a fit.
 - **Custom zones** apply from the month given ("since"). Before that, WHOOP's own zones are used.
-- **WHOOP's zone change:** older exports define zones as % of max heart rate, newer ones as % of heart-rate
-  reserve, and the switch did not happen on the same date for every account. It is found per contributor from the
-  data (a workout's average heart rate against what its zone shares imply under either definition). For wearers on
-  WHOOP's automatic max heart rate, the second-highest daily maximum over the trailing 90 days stands in for it.
-  That is a stand-in only: WHOOP starts from Gellish's age formula and raises it from workout peaks, and the
-  exports cannot pin its value down.
+- **WHOOP's zone change:** WHOOP moved its zones from % of max heart rate to % of heart-rate reserve in 2024. The
+  switch is taken as November 2024 for everyone: the only export with workouts on both sides and no gap switches
+  then, and a single date fits each export at least as well as a change point searched per export (that search
+  leans on an estimated max heart rate and misplaced a whole export). Exports without months fall back to the
+  search. For wearers on WHOOP's automatic max heart rate, the second-highest daily maximum over the trailing 90
+  days stands in for it. That is a stand-in only: WHOOP starts from Gellish's age formula and raises it from
+  workout peaks, and the exports cannot pin its value down.
 - **Validation:** each contributor is scored by a fit made without their data (leave-one-out). The new curve has
   to beat today's formula for every contributor on error, with band agreement at least as high as today. Rows whose
   training set is small are flagged. With a single contributor, the older half of the days is used to fit and the
@@ -63,8 +61,8 @@ Or run the same logic as a script: `python3 whoop_strain_share.py my_whoop_data.
   a bootstrap limited to the workouts at 14+.
 - **`--variants`** adds a leave-one-out table of every model compared in the issue: Edwards weights with only the
   curve refitted, Banister weights, the model published on 2026-09-26 (one weight for all time below zone 1, cap 6),
-  the floor at 20 or 30 %, caps 6, 8 and 10, and every contributor weighted equally. Slow: one leave-one-out run
-  per variant.
+  the floor at 20 or 30 %, caps 6, 8 and 10, a fit on current zones only and every contributor weighted equally.
+  Slow: one leave-one-out run per variant.
 
 The page and the script find columns by header name (English, German, Spanish, French, Portuguese), fall back
 to the current export layout for other app languages, accept exports without an activity name column and skip the
