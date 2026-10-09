@@ -4,29 +4,35 @@ Input: one folder per contributor, each holding the two files from the share pag
 (whoop_workouts_shared.csv, whoop_days_shared.csv) and optionally info.txt, the comment text the
 page produces. Output: a Markdown report comparing the fitted curve with today's formula.
 
-    python3 effort_calibration.py DATA_DIR [--out report.md]
+    python3 effort_calibration.py DATA_DIR [--out report.md] [--variants]
 
-Model (step 1 of the plan: curve and zone weights fitted together):
+--variants adds the leave-one-out table of every model variant compared in the issue (slow: one
+leave-one-out run per variant).
 
-    load  = minutes x (share below zone 1 x w0 + sum over zones of share x exp(beta x (x - 55) / 10))
-    b     = a x ln(1 + load / k)
-    score = 21 x b / (b^p + 21^p)^(1/p)          (approaches 21, never reaches it)
+Proposed model (PROPOSED below):
+
+    weight(x) = exp(beta x (x - 55) / 10) for a minute at intensity x (% of heart-rate reserve), the
+                same for zones 1-5 (at their midpoints 55 ... 95) and for the time below zone 1 (at
+                its own intensity, estimated from the workout's average heart rate), switched off
+                below 20 % HRR with a smooth step
+    load      = minutes x weighted share
+    b         = a x ln(1 + load / k)
+    score     = 21 x b / (b^p + 21^p)^(1/p)       (p = 8: approaches 21, never reaches it)
+
+Fitted: a, k and beta. The floor (20 % HRR) and the cap exponent are fixed design choices, compared
+with their alternatives in the variant table. WHOOP scores workouts that stay close to resting heart
+rate as 0; the floor reproduces that without a separate weight for the time below zone 1.
 
 WHOOP changed how it defines its zones: older exports use % of max heart rate, newer ones % of
-heart-rate reserve. The export carries no dates, so each contributor's switch is found from the data:
-the average heart rate of a workout is compared with what its zone shares imply under either
-definition, and the single change point that fits best is used. Older workouts are then moved to
-their real intensity before fitting.
+heart-rate reserve, and not on the same date for every account. The export carries no dates, so each
+contributor's switch is found from the data: the average heart rate of a workout is compared with
+what its zone shares imply under either definition, and the single change point that fits best is
+used. Only workouts in the current definition train the proposed fit, because converting older zones
+needs an estimated max heart rate. Older workouts are converted and scored, so they still check it.
 
-Fitted: a, k, beta and w0 (0 <= w0 <= 1, so time below zone 1 never counts more than zone 1). The
-soft-cap exponent p is a fixed design choice, P_CAP = 6: it keeps 21 out of reach with room between
-19 and 21, and the few very hard workouts in any export cannot pin it down. Every WHOOP band (light,
-moderate, high, all-out) carries the same total weight in the loss, so the rare hard workouts are
-not drowned out by the many light ones.
-
-x is the zone's intensity in % of heart-rate reserve (55, 65, ... 95 for WHOOP's default zones), so
-custom zones can be placed at their real intensity. Today's formula is Edwards (weights 1..5, zero
-below 50 % HRR) through 21 x ln(1 + TRIMP) / ln(7201).
+Every WHOOP band (light, moderate, high, all-out) carries the same total weight in the loss, so the
+rare hard workouts are not drowned out by the many light ones. Today's formula is Edwards (weights
+1..5, zero below 50 % HRR) through 21 x ln(1 + TRIMP) / ln(7201).
 
 Pure standard library, so it runs wherever python3 does and in tools-python.yml.
 """
@@ -37,7 +43,8 @@ DEFAULT_MIDPOINTS = [55.0, 65.0, 75.0, 85.0, 95.0]  # % HRR, WHOOP's default zon
 BANDS = [(18.0, "all-out"), (14.0, "high"), (10.0, "moderate"), (0.0, "light")]
 
 # WHOOP adds muscular load to Strength Trainer sessions, so their strain is not heart-rate only.
-STRENGTH_WORDS = ["strength", "weight", "lifting", "gewicht", "kraft", "muscul", "pesas", "levantamento", "halter"]
+STRENGTH_WORDS = ["strength", "weight", "lifting", "gewicht", "kraft", "muscul", "pesas", "levantamento", "halter",
+                  "bodybuilding", "culturismo"]
 
 
 # ---------------------------------------------------------------- reading
@@ -114,13 +121,13 @@ def is_strength(activity):
 HRMAX_WINDOW_DAYS = 90
 
 def trailing_hrmax(days, window=HRMAX_WINDOW_DAYS):
-    """WHOOP 'auto' max HR stand-in per day: the second-highest daily max over the trailing window.
+    """Max HR stand-in per day for 'auto' wearers: the second-highest daily max over the trailing window.
 
-    WHOOP's zones follow the max heart rate actually reached lately, and move down again when nobody
-    goes to their limit for a while. On a five-year export, zones implied by this trailing value
-    matched each workout's average heart rate far better (2.5 / 5.8 bpm for the older / newer zone
-    definition) than one value for all years (11.7 / 14.9 bpm). The second-highest keeps a single
-    artefact day from setting it.
+    Used only to place converted older zones and the time below zone 1. It is a stand-in, not WHOOP's
+    value: WHOOP starts from Gellish's age formula and raises it from workout peaks with unpublished
+    checks, and the exports cannot pin that value down. Inferring max HR from zone shares and average
+    heart rate lands 7 to 17 bpm low on the exports whose manual max HR is known, so it cannot decide
+    between rules either. The second-highest keeps a single artefact day from setting it.
     """
     peaks = sorted((int(_num(d["day"])), _num(d.get("max_hr"))) for d in days
                    if _num(d.get("day")) is not None and _num(d.get("max_hr")))
@@ -184,6 +191,25 @@ def edwards_weight(x):
     """Today's Edwards weight for an intensity in % HRR."""
     return 0 if x < 50 else min(5, int((x - 50) // 10) + 1)
 
+BELOW_MIN_SHARE = 0.15  # below this share of the workout, the time below zone 1 hardly matters and is not placed
+
+def below_intensity(below, shares, mids, avg, rhr, hrmax):
+    """Intensity (% HRR) of a workout's time below zone 1, from its average heart rate.
+
+    The time inside zones 1-5 sits at the zone midpoints, so the rest of the average heart rate belongs to
+    the time below zone 1. Clamped between resting heart rate and zone 1's lower edge (5 % below its
+    midpoint). Returns None when it is needed but cannot be placed (no average or resting heart rate), and
+    a fixed 10 % below zone 1's edge when the time below zone 1 is too short to place.
+    """
+    edge = mids[0] - 5.0
+    if below < BELOW_MIN_SHARE:
+        return edge - 10.0
+    if not (avg and rhr and hrmax and hrmax > rhr):
+        return None
+    bpm = [rhr + m / 100.0 * (hrmax - rhr) for m in mids]
+    below_bpm = (avg - sum(s * b for s, b in zip(shares, bpm))) / below
+    return max(0.0, min(edge, (below_bpm - rhr) / (hrmax - rhr) * 100.0))
+
 def prepare(person, workouts, days, info):
     """Turn a contributor's rows into fit-ready workouts, and count what was left out and why."""
     rhr_by_day = {d["day"]: _num(d.get("resting_hr")) for d in days}
@@ -200,7 +226,8 @@ def prepare(person, workouts, days, info):
     # sessions, which carry that name. Whether generic rows sit above the curve is checked in the report
     # rather than assumed.
     out = []
-    skipped = {"strength": 0, "incomplete": 0, "custom zones without bounds": 0, "no resting HR where needed": 0}
+    skipped = {"strength": 0, "incomplete": 0, "custom zones without bounds": 0, "no resting HR where needed": 0,
+               "no average HR": 0}
     generic_kept = 0
     for w in workouts:
         strain, minutes = _num(w.get("strain")), _num(w.get("duration_min"))
@@ -231,10 +258,15 @@ def prepare(person, workouts, days, info):
         else:
             mids = DEFAULT_MIDPOINTS
         z = [s / 100.0 for s in shares]
+        below = max(0.0, 1.0 - sum(z))
+        xb = below_intensity(below, z, mids, _num(w.get("avg_hr")), rhr, hrmax)
+        if xb is None:  # its time below zone 1 cannot be placed without a resting and an average heart rate
+            skipped["no resting HR where needed" if not rhr else "no average HR"] += 1
+            continue
         out.append({
-            "person": person, "day": day, "month": w.get("month") or "", "strain": strain, "minutes": minutes,
-            "old_zones": old, "generic": is_generic(w.get("activity")),
-            "below": max(0.0, 1.0 - sum(z)), "shares": z, "mids": mids,
+            "person": person, "activity": w.get("activity") or "", "day": day, "month": w.get("month") or "",
+            "strain": strain, "minutes": minutes, "old_zones": old, "generic": is_generic(w.get("activity")),
+            "below": below, "xb": xb, "shares": z, "mids": mids,
             "edwards": minutes * sum(s * edwards_weight(x) for s, x in zip(z, mids)),
         })
     skipped["generic name, kept"] = generic_kept
@@ -243,25 +275,105 @@ def prepare(person, workouts, days, info):
 
 # ---------------------------------------------------------------- model
 
-PARAM_NAMES = ["a", "k", "beta", "w0"]
-P_CAP = 6.0
+# A model is a spec (how a workout's minutes are weighted, which numbers are fitted, which workouts train it)
+# plus the fitted numbers. Both live in one dict, prm, so every function below takes the same argument.
+#
+#   weights  zone weight for an intensity x in % HRR: "exp" e^(beta (x - 55) / 10), "edwards" 1 to 5 as
+#            NOOP uses today, "banister" x e^(1.92 x) relative to x = 55 %
+#   below    weight of the time below zone 1: "exp" the same exponential at that time's own intensity,
+#            "w0" one fitted number, "banister" Banister at that time's intensity
+#   floor    % HRR below which time counts nothing (smooth step), None for no floor
+#   p        soft-cap exponent: score = 21 b / (b^p + 21^p)^(1/p)
+#   fitted   the numbers the fit chooses; a and k always
+#   train    "all" or "current zones": only workouts in WHOOP's current (% of reserve) zone definition train it
+#   people   "equal": inside each band every contributor carries the same weight, not every workout
 
-def unpack(theta, p=None):
-    w0 = 1.0 / (1.0 + math.exp(-max(-50.0, min(50.0, theta[3]))))
-    return {"a": math.exp(theta[0]), "k": math.exp(theta[1]), "beta": theta[2], "w0": w0, "p": p or P_CAP}
+FLOOR_WIDTH = 3.0  # % HRR; width of the smooth step at the floor, so the loss stays continuous for the optimiser
 
-def pack(params):
-    w0 = min(max(params["w0"], 1e-9), 1 - 1e-9)
-    return [math.log(params["a"]), math.log(params["k"]), params["beta"], math.log(w0 / (1 - w0))]
+def _spec(**kw):
+    spec = {"weights": "exp", "below": "exp", "floor": 20.0, "p": 8.0, "fitted": ["a", "k", "beta"],
+            "train": "current zones", "people": "workouts"}
+    spec.update(kw)
+    return spec
+
+# The proposed model (ryanbr/noop#2438, 2026-10): one exponential for all intensities, nothing below 20 % HRR.
+PROPOSED = _spec()
+# The model published on 2026-09-26: one fitted weight (w0) for all time below zone 1, cap 6, all zones.
+PUBLISHED = _spec(below="w0", floor=None, p=6.0, fitted=["a", "k", "beta", "w0"], train="all")
+
+# Every variant compared in the issue, in the order of its table (python3 effort_calibration.py DIR --variants).
+VARIANTS = [
+    ("Edwards 1 to 5, only the curve refitted", _spec(weights="edwards", below="w0", floor=None, p=6.0, fitted=["a", "k", "w0"], train="all")),
+    ("Banister weights", _spec(weights="banister", below="banister", floor=None, p=6.0, fitted=["a", "k"], train="all")),
+    ("published model (w0, cap 6)", PUBLISHED),
+    ("published model, current zones only", dict(PUBLISHED, train="current zones")),
+    ("exponential below zone 1 without a floor, cap 6", _spec(floor=None, p=6.0, train="all")),
+    ("floor at 20 %, current zones, cap 6", _spec(p=6.0)),
+    ("floor at 20 %, current zones, cap 8 (proposed)", PROPOSED),
+    ("floor at 20 %, current zones, cap 10", _spec(p=10.0)),
+    ("floor at 30 %, current zones, cap 10", _spec(floor=30.0, p=10.0)),
+    ("proposed, every person weighted equally", _spec(people="equal")),
+]
+
+START = {"a": 4.5, "k": 15.0, "beta": 0.7, "w0": 0.5}
+SPEC_KEYS = ("weights", "below", "floor", "p", "fitted", "train", "people")
+
+def spec_of(prm):
+    return {k: prm[k] for k in SPEC_KEYS}
+
+def unpack(theta, spec=PROPOSED):
+    prm = dict(spec)
+    for name, t in zip(spec["fitted"], theta):
+        if name in ("a", "k"):
+            prm[name] = math.exp(t)
+        elif name == "w0":  # between 0 and 1: time below zone 1 never counts more than zone 1
+            prm[name] = 1.0 / (1.0 + math.exp(-max(-50.0, min(50.0, t))))
+        else:
+            prm[name] = t
+    return prm
+
+def pack(params, spec=PROPOSED):
+    out = []
+    for name in spec["fitted"]:
+        v = params[name]
+        if name in ("a", "k"):
+            out.append(math.log(v))
+        elif name == "w0":
+            v = min(max(v, 1e-9), 1 - 1e-9)
+            out.append(math.log(v / (1 - v)))
+        else:
+            out.append(v)
+    return out
+
+def _sigmoid(z):
+    return 1.0 / (1.0 + math.exp(-max(-50.0, min(50.0, z))))
+
+def _banister(x):
+    return (x / 100.0) * math.exp(1.92 * x / 100.0) / (0.55 * math.exp(1.92 * 0.55))
+
+def zone_weight(x, prm):
+    """Weight of one minute at intensity x (% HRR) inside zones 1 to 5."""
+    if prm["weights"] == "edwards":
+        return edwards_weight(x) or prm["w0"]  # converted older zones can fall below 50 % HRR
+    if prm["weights"] == "banister":
+        return _banister(x)
+    return math.exp(prm["beta"] * (x - 55.0) / 10.0)
+
+def below_weight(x, prm):
+    """Weight of one minute below zone 1, at that time's estimated intensity x (% HRR)."""
+    if prm["below"] == "w0":
+        return prm["w0"]
+    weight = _banister(x) if prm["below"] == "banister" else math.exp(prm["beta"] * (x - 55.0) / 10.0)
+    return weight if prm["floor"] is None else weight * _sigmoid((x - prm["floor"]) / FLOOR_WIDTH)
 
 def load(w, prm, cache=None):
     key = tuple(w["mids"])
     zw = cache.get(key) if cache is not None else None
     if zw is None:
-        zw = [math.exp(prm["beta"] * (x - 55.0) / 10.0) for x in key]
+        zw = [zone_weight(x, prm) for x in key]
         if cache is not None:
             cache[key] = zw
-    return w["minutes"] * (w["below"] * prm["w0"] + sum(s * z for s, z in zip(w["shares"], zw)))
+    return w["minutes"] * (w["below"] * below_weight(w.get("xb", 0.0), prm) + sum(s * z for s, z in zip(w["shares"], zw)))
 
 def curve(load_value, prm):
     b = prm["a"] * math.log1p(max(0.0, load_value) / prm["k"])
@@ -270,6 +382,11 @@ def curve(load_value, prm):
     p, m = prm["p"], max(b, 21.0)  # scaled by the larger term so large p cannot overflow
     # Below 21 mathematically; the clamp only stops float rounding from printing 21.000000000000004.
     return min(21.0 * b / (m * ((b / m) ** p + (21.0 / m) ** p) ** (1.0 / p)), math.nextafter(21.0, 0.0))
+
+def shown(score):
+    """One decimal, but two near the top, rounded down there, so a score the curve keeps below 21 never
+    prints as 21."""
+    return f"{math.floor(score * 100) / 100:.2f}" if score >= 20.95 else f"{score:.1f}"
 
 def today_score(trimp):
     return 21.0 * math.log1p(max(0.0, trimp)) / math.log(TODAY_DENOMINATOR)
@@ -281,16 +398,18 @@ def huber(r, delta=1.0):
     a = abs(r)
     return 0.5 * r * r if a <= delta else delta * (a - 0.5 * delta)
 
-def objective(theta, data, balanced=True, p=None):
-    """Huber loss. balanced: each WHOOP band carries the same total weight (the default)."""
+def objective(theta, data, spec=PROPOSED, balanced=True):
+    """Huber loss. balanced: each WHOOP band carries the same total weight (the default). With
+    spec["people"] == "equal", every contributor also carries the same weight inside a band."""
     try:
-        prm, cache = unpack(theta, p), {}
+        prm, cache = unpack(theta, spec), {}
         if not balanced:
             return sum(huber(w["strain"] - predict(w, prm, cache)) for w in data) / len(data)
         per_band = {}
         for w in data:
-            per_band.setdefault(w["band"], []).append(huber(w["strain"] - predict(w, prm, cache)))
-        return sum(sum(v) / len(v) for v in per_band.values()) / len(per_band)
+            per_band.setdefault(w["band"], {}).setdefault(w["person"] if spec["people"] == "equal" else "", []).append(
+                huber(w["strain"] - predict(w, prm, cache)))
+        return sum(sum(sum(v) / len(v) for v in groups.values()) / len(groups) for groups in per_band.values()) / len(per_band)
     except (OverflowError, ValueError, ZeroDivisionError):
         return float("inf")
 
@@ -323,24 +442,28 @@ def nelder_mead(f, x0, step=0.5, iters=4000, tol=1e-10):
     best = min(range(n + 1), key=lambda i: vals[i])
     return pts[best], vals[best]
 
-START = {"a": 4.5, "k": 15.0, "beta": 0.7, "w0": 0.5}
+def training_rows(data, spec):
+    """The workouts a spec learns from: with train == "current zones", only WHOOP's % of reserve zones, so no
+    fitted number depends on converting older zones through an estimated max heart rate."""
+    return [w for w in data if spec["train"] == "all" or not w.get("old_zones")]
 
-def fit(data, starts=4, seed=0, balanced=True, p=None):
-    """Fit a, k, beta and w0 with a robust (Huber) loss; several starts guard against local minima."""
+def fit(data, spec=PROPOSED, starts=4, seed=0, balanced=True):
+    """Fit a spec's numbers with a robust (Huber) loss; several starts guard against local minima."""
+    data = training_rows(data, spec)
     for w in data:
         w.setdefault("band", band(w["strain"]))
-    f = lambda t: objective(t, data, balanced, p)
+    f = lambda t: objective(t, data, spec, balanced)
     rng = random.Random(seed)
     best = None
     for s in range(starts):
-        x0 = pack(START)
+        x0 = pack(START, spec)
         if s:
             x0 = [v + rng.uniform(-0.7, 0.7) for v in x0]
         theta, val = nelder_mead(f, x0)
         theta, val = nelder_mead(f, theta, step=0.1)  # restart to polish
         if best is None or val < best[1]:
             best = (theta, val)
-    return unpack(best[0], p)
+    return unpack(best[0], spec)
 
 
 # ---------------------------------------------------------------- evaluation
@@ -378,7 +501,8 @@ def leave_one_out(by_person, unverified=(), **fit_args):
         prm = fit(train, **fit_args)
         e = evaluate(by_person[person], prm)
         e["params"] = prm
-        e["small_training_set"] = len(train) < MIN_TRAIN_WORKOUTS or sum(w["strain"] >= 14 for w in train) < MIN_TRAIN_HARD
+        used = training_rows(train, spec_of(prm))
+        e["small_training_set"] = len(used) < MIN_TRAIN_WORKOUTS or sum(w["strain"] >= 14 for w in used) < MIN_TRAIN_HARD
         results[person] = e
     return results
 
@@ -426,16 +550,24 @@ SCENARIOS = [
     ("24 h at >= 90 % HRR", (0, 0, 0, 0, 0, 1440)),
 ]
 
-def scenario(minutes, prm):
+# Time below zone 1 only, at a given intensity (% HRR): what the floor does
+BELOW_SCENARIOS = [
+    ("60 min stroll at 15 % HRR", (60, 0, 0, 0, 0, 0), 15.0),
+    ("60 min easy walk at 35 % HRR", (60, 0, 0, 0, 0, 0), 35.0),
+]
+
+def scenario(minutes, prm, xb=0.0):
+    """(today, new) for a day of minutes per zone; xb is the intensity (% HRR) of the time below zone 1."""
     total = sum(minutes)
-    w = {"minutes": total, "below": minutes[0] / total, "shares": [m / total for m in minutes[1:]], "mids": DEFAULT_MIDPOINTS}
+    w = {"minutes": total, "below": minutes[0] / total, "xb": xb, "shares": [m / total for m in minutes[1:]],
+         "mids": DEFAULT_MIDPOINTS}
     edwards = sum(m * (i + 1) for i, m in enumerate(minutes[1:]))
     return today_score(edwards), predict(w, prm)
 
 
 # ---------------------------------------------------------------- report
 
-def report(data_dir):
+def report(data_dir, variants=False):
     people, prepared, skipped, raw, switches, unverified = {}, {}, {}, {}, {}, set()
     for name in sorted(os.listdir(data_dir)):
         folder = os.path.join(data_dir, name)
@@ -452,7 +584,8 @@ def report(data_dir):
     pooled = [w for p, ws in usable.items() if p not in unverified for w in ws]
     prm = fit(pooled)
     lines = ["## Effort calibration report", ""]
-    lines += [f"Contributors: {len(usable)}. Workouts used for the fit: {len(pooled)}.", ""]
+    lines += [f"Contributors: {len(usable)}. Workouts scored: {sum(len(ws) for ws in usable.values())}. "
+              f"Workouts that train the fit: {len(training_rows(pooled, PROPOSED))} (WHOOP's current zones only).", ""]
     if unverified & set(usable):
         lines += ["Marked *cardio-unverified* (export has no activity names, so strength sessions cannot be left out): "
                   + ", ".join(sorted(unverified & set(usable))) + ". They are scored below but do not train any fit.", ""]
@@ -475,10 +608,14 @@ def report(data_dir):
         if p not in usable:
             left = ", ".join(f"{v} {k}" for k, v in skipped[p].items() if v and k != "generic name, kept") or "no rows"
             lines.append(f"| {p} | 0 (not used) | {left} | - | - | - | - |")
-    lines += ["", "### Fitted parameters", "", "| " + " | ".join(PARAM_NAMES) + " | p (fixed) |", "|" + "---|" * (len(PARAM_NAMES) + 1)]
-    lines.append("| " + " | ".join(f"{prm[n]:.3g}" for n in PARAM_NAMES) + f" | {P_CAP:g} |")
-    zw = [math.exp(prm["beta"] * (x - 55) / 10) for x in DEFAULT_MIDPOINTS]
-    lines += ["", "Zone weights (below zone 1, zones 1-5): " + ", ".join(f"{v:.2f}" for v in [prm["w0"]] + zw), ""]
+    names = prm["fitted"]
+    floor_text = "none" if prm["floor"] is None else f"{prm['floor']:g} % HRR"
+    lines += ["", "### Fitted parameters", "", "| " + " | ".join(names) + " | floor (fixed) | p (fixed) |",
+              "|" + "---|" * (len(names) + 2)]
+    lines.append("| " + " | ".join(f"{prm[n]:.3g}" for n in names) + f" | {floor_text} | {prm['p']:g} |")
+    lines += ["", "Weight of one minute, relative to zone 1's midpoint: below zone 1 at 15 / 30 / 45 % HRR "
+              + " / ".join(f"{below_weight(x, prm):.2f}" for x in (15, 30, 45))
+              + "; zones 1-5 " + ", ".join(f"{zone_weight(x, prm):.2f}" for x in DEFAULT_MIDPOINTS), ""]
     lines += ["### Validation", ""]
     if len(usable) >= 2:
         lines += ["Each contributor is scored by a fit made **without** their data (leave-one-out).", ""]
@@ -499,9 +636,9 @@ def report(data_dir):
                   f"than {MIN_TRAIN_HARD} at 14+, so the row says little yet.*"]
     if len(usable) >= 2:
         lines += ["", "Parameters of each leave-one-out fit (how much one contributor moves the curve):", "",
-                  "| left out | " + " | ".join(PARAM_NAMES) + " |", "|---|" + "---|" * len(PARAM_NAMES)]
+                  "| left out | " + " | ".join(names) + " |", "|---|" + "---|" * len(names)]
         for p, e in results.items():
-            lines.append(f"| {p} | " + " | ".join(f"{e['params'][n]:.3g}" for n in PARAM_NAMES) + " |")
+            lines.append(f"| {p} | " + " | ".join(f"{e['params'][n]:.3g}" for n in names) + " |")
     lines += ["", "Error is the root-mean-square difference from WHOOP's Activity Strain, in points on the 0-21 axis. "
               "Bias on 14+ is the average difference on workouts WHOOP scored 14 or higher (negative = too low).", ""]
     lines += ["### Checks", ""]
@@ -517,11 +654,18 @@ def report(data_dir):
     if pooled_hy:
         lines.append("- all contributors, by half-year: " + ", ".join(f"{k} {v:+.2f} (n={n})" for k, (v, n) in pooled_hy.items()))
     lines += generic_check(usable, prm)
+    if len(usable) >= 2:
+        lines += contributor_tables(usable, results)
     lines += sensitivity(usable, pooled, prm, len(usable) >= 2, unverified)
+    if variants and len(usable) >= 2:
+        lines += variant_table(usable, unverified)
     lines += ["", "### Example days (0-21)", "", "| day | today | fitted |", "|---|---|---|"]
     for name, minutes in SCENARIOS:
         t, n = scenario(minutes, prm)
-        lines.append(f"| {name} | {t:.1f} | {n:.1f} |")
+        lines.append(f"| {name} | {shown(t)} | {shown(n)} |")
+    for name, minutes, xb in BELOW_SCENARIOS:
+        t, n = scenario(minutes, prm, xb)
+        lines.append(f"| {name} | {shown(t)} | {shown(n)} |")
     return "\n".join(lines) + "\n"
 
 HARD_SCENARIOS = ["1 h zone 4", "90 min intervals", "Marathon 3:30", "10 h ultra"]
@@ -560,24 +704,26 @@ def generic_check(usable, prm, min_n=10, limit=1.0):
 def sensitivity(usable, pooled, prm, can_loo, unverified=(), reps=20, seed=0):
     """The checks asked for in review: band weighting on/off, the fixed cap p, and the spread at the top."""
     fmt = lambda v: "-" if v is None else f"{v:+.1f}"
+    checks = [("band-balanced, cap 8 (default)", PROPOSED, True), ("unweighted, cap 8", PROPOSED, False),
+              ("band-balanced, cap 6", dict(PROPOSED, p=6.0), True), ("band-balanced, cap 10", dict(PROPOSED, p=10.0), True)]
     lines = ["", "### Sensitivity", ""]
     if can_loo:
-        lines += ["Leave-one-out summary for each variant (errors weighted by workouts):", "",
-                  "| variant | error today | error new | right band today | right band new | bias on 14+ today | bias on 14+ new | contributors better than today |",
+        lines += ["Leave-one-out summary for each check (errors weighted by workouts):", "",
+                  "| check | error today | error new | right band today | right band new | bias on 14+ today | bias on 14+ new | contributors better than today |",
                   "|---|---|---|---|---|---|---|---|"]
-        for label, args in (("band-balanced, p = 6 (default)", {}), ("unweighted, p = 6", {"balanced": False}),
-                            ("band-balanced, p = 4", {"p": 4.0}), ("band-balanced, p = 8", {"p": 8.0})):
-            m = _summary(leave_one_out(usable, unverified, starts=2, **args))
+        for label, spec, balanced in checks:
+            m = _summary(leave_one_out(usable, unverified, spec=spec, balanced=balanced, starts=2))
             lines.append(f"| {label} | {m['rmse_today']:.2f} | {m['rmse_new']:.2f} | {m['bands_today']:.0%} | {m['bands_new']:.0%} | "
                          f"{fmt(m['top_bias_today'])} | {fmt(m['top_bias_new'])} | {m['passed']} of {m['of']} |")
         lines.append("")
-    lines += ["Example days under each variant (fit on all contributors):", "",
-              "| day | unweighted | p = 4 | p = 6 | p = 8 |", "|---|---|---|---|---|"]
-    variants = [fit(pooled, starts=2, balanced=False), fit(pooled, starts=2, p=4.0), prm, fit(pooled, starts=2, p=8.0)]
+    fits = [prm if (spec is PROPOSED and balanced) else fit(pooled, spec=spec, balanced=balanced, starts=2)
+            for _, spec, balanced in checks]
+    lines += ["Example days under each check (fit on all contributors):", "",
+              "| day | " + " | ".join(label for label, _, _ in checks) + " |", "|---|" + "---|" * len(checks)]
     for name, minutes in SCENARIOS:
-        lines.append(f"| {name} | " + " | ".join(f"{scenario(minutes, v)[1]:.1f}" for v in variants) + " |")
-    hard = [w for w in pooled if w["strain"] >= 14]
-    rest = [w for w in pooled if w["strain"] < 14]
+        lines.append(f"| {name} | " + " | ".join(shown(scenario(minutes, v)[1]) for v in fits) + " |")
+    hard = [w for w in training_rows(pooled, PROPOSED) if w["strain"] >= 14]
+    rest = [w for w in training_rows(pooled, PROPOSED) if w["strain"] < 14]
     if len(hard) >= 5:
         rng, spread = random.Random(seed), {n: [] for n in HARD_SCENARIOS}
         for r in range(reps):
@@ -586,18 +732,65 @@ def sensitivity(usable, pooled, prm, can_loo, unverified=(), reps=20, seed=0):
             for name, minutes in SCENARIOS:
                 if name in spread:
                     spread[name].append(scenario(minutes, v)[1])
-        lines += ["", f"Spread at the top: the {len(hard)} workouts at 14+ resampled {reps} times, everything else fixed "
-                  "(range of the middle 90 %):", "", "| day | fitted | range |", "|---|---|---|"]
+        lines += ["", f"Spread at the top: the {len(hard)} training workouts at 14+ resampled {reps} times, everything else "
+                  "fixed (range of the middle 90 %):", "", "| day | fitted | range |", "|---|---|---|"]
         for name, minutes in SCENARIOS:
             if name in spread:
                 v = sorted(spread[name]); lo, hi = v[max(0, reps // 20)], v[min(reps - 1, reps - 1 - reps // 20)]
-                lines.append(f"| {name} | {scenario(minutes, prm)[1]:.1f} | {lo:.1f} to {hi:.1f} |")
+                lines.append(f"| {name} | {shown(scenario(minutes, prm)[1])} | {shown(lo)} to {shown(hi)} |")
+    return lines
+
+def contributor_tables(usable, results):
+    """What the new curve means for each contributor: average WHOOP, today and new score of their own hard
+    (14+) and light (below 10) workouts, each scored by the fit made without them."""
+    rows = {p: [(w["strain"], today_score(w["edwards"]), predict(w, results[p]["params"])) for w in ws]
+            for p, ws in usable.items() if p in results}
+    lines = []
+    for title, lo, hi in (("Hard workouts (WHOOP 14 or more)", 14.0, 99.0), ("Light workouts (WHOOP below 10)", 0.0, 10.0)):
+        lines += ["", f"### {title}", "", "| contributor | workouts | WHOOP | NOOP today | NOOP new |", "|---|---|---|---|---|"]
+        picked = {p: [r for r in rs if lo <= r[0] < hi] for p, rs in rows.items()}
+        for p in sorted(picked, key=lambda q: (-len([r for r in rows[q] if r[0] >= 14]), -len(rows[q]))):
+            rs = picked[p]
+            if rs:
+                n = len(rs)
+                lines.append(f"| {p} | {n} | {sum(r[0] for r in rs) / n:.1f} | {sum(r[1] for r in rs) / n:.1f} | "
+                             f"**{sum(r[2] for r in rs) / n:.1f}** |")
+        everyone = [r for rs in picked.values() for r in rs]
+        if everyone:
+            closer = sum(abs(r[2] - r[0]) < abs(r[1] - r[0]) for r in everyone)
+            in_band = lambda i: sum(band(r[i]) == band(r[0]) for r in everyone)
+            off = lambda i: sum(r[i] - r[0] for r in everyone) / len(everyone)
+            lines += ["", f"{closer} of {len(everyone)} closer to WHOOP than today; in WHOOP's band today {in_band(1)}, "
+                      f"new {in_band(2)}; off by {off(1):+.2f} today, {off(2):+.2f} new."]
+    return lines
+
+def variant_table(usable, unverified=()):
+    """Every variant compared in the issue, scored the same way: leave-one-out, every workout counted once."""
+    everyone = [w for ws in usable.values() for w in ws]
+    truth = [w["strain"] for w in everyone]
+    def pooled(pred):
+        n = len(truth)
+        top = [p - t for p, t in zip(pred, truth) if t >= 14]
+        return (math.sqrt(sum((p - t) ** 2 for p, t in zip(pred, truth)) / n),
+                sum(band(p) == band(t) for p, t in zip(pred, truth)) / n, sum(top) / len(top) if top else None)
+    fmt = lambda v: "-" if v is None else f"{v:+.1f}"
+    rm, bd, top = pooled([today_score(w["edwards"]) for w in everyone])
+    lines = ["", "### Every variant", "",
+             "Leave-one-out over every contributor, every workout counted once (so it differs a little from the "
+             "per-contributor averages above).", "",
+             "| variant | error | right band | off by at 14+ | better than today |", "|---|---|---|---|---|",
+             f"| NOOP today | {rm:.2f} | {bd:.0%} | {fmt(top)} | |"]
+    for label, spec in VARIANTS:
+        res = leave_one_out(usable, unverified, spec=spec)
+        pred = [predict(w, res[p]["params"]) for p, ws in usable.items() for w in ws]
+        rm, bd, top = pooled(pred)
+        lines.append(f"| {label} | {rm:.2f} | {bd:.0%} | {fmt(top)} | {sum(passes(e) for e in res.values())} of {len(res)} |")
     return lines
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         sys.exit(__doc__)
-    text = report(sys.argv[1])
+    text = report(sys.argv[1], variants="--variants" in sys.argv)
     if "--out" in sys.argv:
         open(sys.argv[sys.argv.index("--out") + 1], "w", encoding="utf-8").write(text)
     print(text)
